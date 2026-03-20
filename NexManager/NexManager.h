@@ -21,10 +21,6 @@
     NexManager::sendFormatted("vis %s,%d", "q0", 1);           // Visibilità
     NexManager::sendFormatted("click %s,%d", "b0", 1);         // Simula click
 
-    // Per valori float (come facevi con dtostrf)
-    char buff[16];
-    dtostrf(temperatura, 4, 1, buff);
-    NexManager::sendFormatted("%s.txt=\"%s\"", "t_temp", buff);
  */
 namespace NexManager {
 
@@ -36,19 +32,6 @@ struct TouchEvent {
     
     TouchEvent() : page(0), component(0), event(0), isValid(false) {}
 };
-/* // Invece di setPicture, setText, setValue...
-    NexManager::sendFormatted("%s.picc=%d", "c0", 5);           // Crop picture
-    NexManager::sendFormatted("%s.txt=\"%s\"", "t0", "Ciao"); // Testo
-    NexManager::sendFormatted("%s.val=%d", "h0", 50);         // Valore numerico
-    NexManager::sendFormatted("page %d", 1);                   // Cambio pagina
-    NexManager::sendFormatted("vis %s,%d", "q0", 1);           // Visibilità
-    NexManager::sendFormatted("click %s,%d", "b0", 1);         // Simula click
-
-    // Per valori float (come facevi con dtostrf)
-    char buff[16];
-    dtostrf(temperatura, 4, 1, buff);
-    NexManager::sendFormatted("%s.txt=\"%s\"", "t_temp", buff);
- */
 void sendFormatted(const char *format, ...); 
 
 /**

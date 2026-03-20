@@ -1,6 +1,4 @@
 #include "NexManager.h"
-// #include <EspNowManager.h>
-#include <impostazioni_chrono.h>
 
 #if defined(ESP32_BUILD)
 #define NEX_SERIAL Serial1
@@ -175,14 +173,7 @@ void refreshCurrentPage() {
   char buff[16];
 
   if (stato.currPage == 0) {
-    // //LOG_VERBOSE("[refreshCurrentPage] Page %d", stato.currPage);
-    // // Raggruppa operazioni simili
-    // const char *textWidgets[] = {"Ncurr_hour", "Nday", "Ntcurr", "Nout_temp",
-    //                              "Nout_hum", "Nin_hum", "Nwater_temp",
-    //                              "Nset_temp"};
-    // const char *cropWidgets[] = {"Nrisc_on", "Nwater_on", "Nalarm"};
-    // const char *values[] = {stato.timeStr, stato.dayStr, "", "", "", "", "",
-    // ""};
+
     stato.selectionMask =
         0x1F; // Sempre reset a tutte selezionati gli slider tende
     // Aggiorna testo data/ora
