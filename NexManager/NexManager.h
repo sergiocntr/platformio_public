@@ -62,4 +62,5 @@ void wakeupNextion();
 void setPage(const char *pageId);
 void aggiornaSliderTende();
 
+
 } // namespace NexManager

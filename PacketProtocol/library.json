@@ -1,0 +1,11 @@
+{
+  "name": "PacketProtocol",
+  "version": "1.0.0",
+  "description": "Binary packet protocol for sensor data transmission",
+  "keywords": ["protocol", "binary", "mqtt"],
+  "frameworks": "arduino",
+  "platforms": ["espressif8266", "espressif32"],
+  "build": {
+    "srcDir": "src"
+  }
+}

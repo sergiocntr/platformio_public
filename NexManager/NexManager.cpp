@@ -1,5 +1,7 @@
 #include "NexManager.h"
-
+#include <shared_config.h>
+#include <log_lib.h>
+// stato è definito in impostazioni_chrono.cpp, dichiarato extern in shared_config.h
 #if defined(ESP32_BUILD)
 #define NEX_SERIAL Serial1
 #else

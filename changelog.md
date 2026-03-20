@@ -1,13 +1,9 @@
-## VERSIONE 1.1.0
-**Gestione modulare delle dipendenze**
-  - Deploy su github delle librerie condivise
-  - version.h con definizioni di versione
-  - version_check.h con logica di warning
-  - Macro EXPECTED_LIB_VERSION_MAJOR/MINOR nei progetti
+## VERSIONE 1.3.0
+- Aggiunto library.json per ogni libreria
+- Aggiunta cartella `shared_config1 per dichiarazioni condivise
+- altri piccoli fix
 
-**Sottoscrizione dinamica MQTT**
-  - Funzione sottoscriviTopics() con array di topic
-  - Terminatore nullptr per flessibilità
+
 ## VERSIONE 1.2.0
 ### Modifica nella libreria ESPManager
 - Rimosse tutte le dipendenze esterne — niente impostazioni_chrono.h, NexManager.h, stato, EspPacket, broadcastAddress, gatewayAddress. 
@@ -40,3 +36,13 @@ EspNowManager::addPeer(mac2);
 // Nel loop():
 EspNowManager::poll();
 ```
+## VERSIONE 1.1.0
+**Gestione modulare delle dipendenze**
+  - Deploy su github delle librerie condivise
+  - version.h con definizioni di versione
+  - version_check.h con logica di warning
+  - Macro EXPECTED_LIB_VERSION_MAJOR/MINOR nei progetti
+
+**Sottoscrizione dinamica MQTT**
+  - Funzione sottoscriviTopics() con array di topic
+  - Terminatore nullptr per flessibilità

@@ -1,0 +1,8 @@
+{
+  "name": "shared_config",
+  "version": "1.0.0",
+  "description": "Shared state and configuration types for chrono devices",
+  "keywords": ["config", "state", "chrono"],
+  "frameworks": "arduino",
+  "platforms": ["espressif8266", "espressif32"]
+}

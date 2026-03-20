@@ -1,0 +1,8 @@
+{
+  "name": "nodeRelay",
+  "version": "1.0.0",
+  "description": "Simple relay control library for Arduino/ESP",
+  "keywords": ["relay", "gpio"],
+  "frameworks": "arduino",
+  "platforms": ["espressif8266", "espressif32"]
+}

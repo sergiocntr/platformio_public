@@ -13,11 +13,12 @@ const uint8_t MAX_TENTATIVI = 3;
 const unsigned long TIMEOUT_WIFI = 12000;
 const unsigned long TIMEOUT_MQTT = 12000;
 const unsigned long SLEEP_TIME_US = 5ULL * 60ULL * 1000000ULL;
-
+const uint8_t versione = 123;
 uint8_t tentativiWifi = 0;
 uint8_t tentativiMqtt = 0;
 IPAddress m_ip;
 char m_mqtt_id[20];
+const char **m_topics = nullptr; // array topic fornito dal progetto
 // ========== GESTIONE PUBBLICAZIONE ==========
 bool publish(const char *topic, const char *message, bool retained) {
   if (!client.connected()) {
@@ -234,7 +235,7 @@ bool connectMqtt() {
     if (client.connect(clientId.c_str(), mqttUser, mqttPass)) {
       LOG_VERBOSE("[MQTT] ✓ Connesso");
       tentativiMqtt = 0; // Reset contatore
-      return sottoscriviTopics(PROGETTO_TOPICS);
+      return sottoscriviTopics(m_topics);
     }
 
     delay(250);
@@ -338,8 +339,9 @@ MotivoSpegnimento gestisciConnessione() {
 }
 
 // ========== SETUP COMPLETO ==========
-MotivoSpegnimento setupCompleto(IPAddress ip, const char *mqtt_id) {
+MotivoSpegnimento setupCompleto(IPAddress ip, const char *mqtt_id, const char *topics[]) {
   m_ip = ip;
+  m_topics = topics;
   strcpy(m_mqtt_id, mqtt_id);
   setupWifi();   // 1️⃣ WiFi prima
   udpLogBegin(); // 2️⃣ poi inizializza UDP log

@@ -1,0 +1,8 @@
+{
+  "name": "mqttWifi",
+  "version": "1.0.0",
+  "description": "WiFi + MQTT connection manager for ESP8266/ESP32",
+  "keywords": ["mqtt", "wifi", "esp8266", "esp32"],
+  "frameworks": "arduino",
+  "platforms": ["espressif8266", "espressif32"]
+}

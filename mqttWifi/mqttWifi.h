@@ -14,7 +14,6 @@
 
 #include <ArduinoJson.h>
 #include <PubSubClient.h>
-#include <impostazioni_energy.h>
 #include <log_lib.h>
 #include <myIP.h>
 #include <password.h>
@@ -57,6 +56,6 @@ bool publish(const char *topic, const uint8_t *payload, size_t length,
 MotivoSpegnimento gestisciConnessione();
 
 // ========== SETUP COMPLETO (DA CHIAMARE IN setup()) ==========
-MotivoSpegnimento setupCompleto(IPAddress ip, const char *mqtt_id);
+MotivoSpegnimento setupCompleto(IPAddress ip, const char *mqtt_id, const char *topics[]);
 
 } // namespace mqttWifi
