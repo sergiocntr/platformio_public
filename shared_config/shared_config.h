@@ -1,6 +1,7 @@
 #pragma once
 #include <Arduino.h>
 #include <log_lib.h>
+#include <devices.h>
 enum SensIdx {
   INT = 0, // Interno (Chrono)
   EXT = 1, // Esterno (ESPmeteo)

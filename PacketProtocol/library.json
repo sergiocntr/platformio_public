@@ -5,8 +5,8 @@
   "keywords": ["protocol", "binary", "mqtt"],
   "frameworks": "arduino",
   "platforms": ["espressif8266", "espressif32"],
-  "build": {
-    "srcDir": "src",
-    "includeDir": "src"
+    "build": {
+    "srcDir": ".",
+    "includeDir": "."
   }
 }

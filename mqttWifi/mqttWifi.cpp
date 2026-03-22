@@ -13,7 +13,7 @@ const uint8_t MAX_TENTATIVI = 3;
 const unsigned long TIMEOUT_WIFI = 12000;
 const unsigned long TIMEOUT_MQTT = 12000;
 const unsigned long SLEEP_TIME_US = 5ULL * 60ULL * 1000000ULL;
-const uint8_t versione = 123;
+
 uint8_t tentativiWifi = 0;
 uint8_t tentativiMqtt = 0;
 IPAddress m_ip;
