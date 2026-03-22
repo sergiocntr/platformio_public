@@ -1,6 +1,6 @@
 
 # Mie Librerie Condivise
-- curr ver 1.5.1
+- curr ver 1.5.2
 
 **Librerie comuni per progetti ESP8266/ESP32 con gestione MQTT e versionamento automatico.**
 
