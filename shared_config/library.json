@@ -1,6 +1,6 @@
 {
   "name": "shared_config",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "description": "Shared state and configuration types for chrono devices",
   "keywords": ["config", "state", "chrono"],
   "frameworks": "arduino",

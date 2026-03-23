@@ -1,6 +1,6 @@
 
 # Mie Librerie Condivise
-- curr ver 1.5.5
+- curr ver 1.5.6
 
 **Librerie comuni per progetti ESP8266/ESP32 con gestione MQTT e versionamento automatico.**
 
@@ -19,7 +19,7 @@ Aggiungi il percorso nel `platformio.ini`
 ```ini
 # platformio.ini
 lib_deps = 
-    https://github.com/sergiocntr/platformio_libs/raw/refs/heads/master/packages/NexManager-1.0.0.tar.gz
+    https://github.com/sergiocntr/platformio_libs/raw/refs/heads/master/packages/NexManager-1.0.2.tar.gz
 ```
 
 **Alla compilazione riceverai un warning se la versione non corrisponde.**
