@@ -17,7 +17,13 @@
 // ============================================================
 #define DEBUG_CHRONO
 #define DEBUG_UDP_LOG // UDP sempre attivo
+#ifndef DEBUG_LEVEL
 #define DEBUG_LEVEL 3 // 0=solo errori, 1=warning, 2=info, 3=verbose
+#endif
+
+#ifndef DEBUG_UDP_LOG
+#define DEBUG_UDP_LOG
+#endif
 
 #define UDP_LOG_IP "192.168.1.100" // IP del PC che riceve i log
 #define UDP_LOG_PORT 4444
@@ -38,19 +44,25 @@ inline String _toStr(IPAddress ip) { return ip.toString(); }
 #if DEBUG_LEVEL >= 1
 #define LOG_WARN(...) udpLogSend_f(__VA_ARGS__)
 #else
-#define LOG_WARN(...) do {} while (0)
+#define LOG_WARN(...)                                                          \
+  do {                                                                         \
+  } while (0)
 #endif
 
 #if DEBUG_LEVEL >= 2
 #define LOG_INFO(...) udpLogSend_f(__VA_ARGS__)
 #else
-#define LOG_INFO(...) do {} while (0)
+#define LOG_INFO(...)                                                          \
+  do {                                                                         \
+  } while (0)
 #endif
 
 #if DEBUG_LEVEL >= 3
 #define LOG_VERBOSE(...) udpLogSend_f(__VA_ARGS__)
 #else
-#define LOG_VERBOSE(...) do {} while (0)
+#define LOG_VERBOSE(...)                                                       \
+  do {                                                                         \
+  } while (0)
 #endif
 
 #elif defined(DEBUG_CHRONO)
@@ -65,12 +77,24 @@ inline String _toStr(IPAddress ip) { return ip.toString(); }
 
 #else
 // Produzione — tutto sparisce
-#define logSerialBegin(a) do {} while (0)
-#define logSerialPrint(a) do {} while (0)
-#define LOG_ERROR(...) do {} while (0)
-#define LOG_WARN(...) do {} while (0)
-#define LOG_INFO(...) do {} while (0)
-#define LOG_VERBOSE(...) do {} while (0)
+#define logSerialBegin(a)                                                      \
+  do {                                                                         \
+  } while (0)
+#define logSerialPrint(a)                                                      \
+  do {                                                                         \
+  } while (0)
+#define LOG_ERROR(...)                                                         \
+  do {                                                                         \
+  } while (0)
+#define LOG_WARN(...)                                                          \
+  do {                                                                         \
+  } while (0)
+#define LOG_INFO(...)                                                          \
+  do {                                                                         \
+  } while (0)
+#define LOG_VERBOSE(...)                                                       \
+  do {                                                                         \
+  } while (0)
 #endif
 
 // ========== ENUM MOTIVI SPEGNIMENTO ==========

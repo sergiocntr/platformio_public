@@ -1,6 +1,6 @@
 {
   "name": "log_lib",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "UDP/Serial logging library for Arduino/ESP projects",
   "keywords": ["logging", "udp", "debug"],
   "frameworks": "arduino",
