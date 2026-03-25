@@ -12,7 +12,8 @@
 #include <WiFi.h>
 #endif
 
-#include <ArduinoJson.h>
+// #include <ArduinoJson.h>
+#include "mqttWifi_transport.h"
 #include <PubSubClient.h>
 #include <log_lib.h>
 #include <myIP.h>
@@ -22,6 +23,10 @@
 
 namespace mqttWifi {
 extern PubSubClient client;
+
+// trasporto selezionabile
+void setMqttTransport(MqttTransportType t);
+MqttTransportType getMqttTransport();
 
 // ========== VARIABILI DI STATO ==========
 extern IPAddress m_ip;
@@ -56,6 +61,7 @@ bool publish(const char *topic, const uint8_t *payload, size_t length,
 MotivoSpegnimento gestisciConnessione();
 
 // ========== SETUP COMPLETO (DA CHIAMARE IN setup()) ==========
-MotivoSpegnimento setupCompleto(IPAddress ip, const char *mqtt_id, const char *topics[]);
+MotivoSpegnimento setupCompleto(IPAddress ip, const char *mqtt_id,
+                                const char *topics[]);
 
 } // namespace mqttWifi

@@ -2,9 +2,9 @@
 #ifndef LIB_VERSION_H
 #define LIB_VERSION_H
 
-#define LIB_VERSION_MAJOR 1
-#define LIB_VERSION_MINOR 5
-#define LIB_VERSION_PATCH 9
+#define LIB_VERSION_MAJOR 2
+#define LIB_VERSION_MINOR 0
+#define LIB_VERSION_PATCH 0
 
 #define STRINGIFY(x) #x
 #define TOSTRING(x) STRINGIFY(x)

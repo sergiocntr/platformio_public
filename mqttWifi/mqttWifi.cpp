@@ -1,12 +1,30 @@
 #include "mqttWifi.h"
 #include "IPAddress.h"
+#include "PubSubClient.h"
+#include "mqttWifi_transport.h"
 #include "topic.h"
 
 WiFiClient mywifi;
 WiFiClient c;
 
+static IMqttTransport *mqttTransport = nullptr;
+static MqttTransportType currentTransport = DEFAULT_MQTT_TRANSPORT;
+
 namespace mqttWifi {
 PubSubClient client(c);
+
+void setMqttTransport(MqttTransportType t) {
+  if (mqttTransport) {
+    mqttTransport->disconnect();
+    delete mqttTransport;
+  }
+  currentTransport = t;
+  mqttTransport = createMqttTransport(t);
+  if (mqttTransport)
+    mqttTransport->init();
+}
+
+MqttTransportType getMqttTransport() { return currentTransport; }
 
 // ========== CONFIGURAZIONE ==========
 const uint8_t MAX_TENTATIVI = 3;
@@ -75,6 +93,9 @@ bool publish(const char *topic, const uint8_t *payload, size_t length,
 void logMotivoSpegnimento(MotivoSpegnimento motivo) {
   LOG_INFO("[SLEEP] Motivo: ");
   switch (motivo) {
+  case CLEAN_SHUTDOWN:
+    LOG_INFO("CLEAN SHUTDOWN");
+    break;
   case PUBLISH_FALLITO:
     LOG_ERROR("PUBLISH FALLITO dopo 3 tentativi");
     break;
@@ -127,9 +148,15 @@ void adessoDormo(uint8_t mode, MotivoSpegnimento motivo) {
 
   // Spegnimento WiFi
   LOG_VERBOSE("[SLEEP] Spegnimento WiFi");
+  delay(50);
   WiFi.disconnect(true);
   WiFi.mode(WIFI_OFF);
   delay(200);
+
+  if (MotivoSpegnimento::ONLY_DISCONNETS == motivo) {
+    LOG_VERBOSE("[SLEEP] ONLY DISCONNECTS: non entro in deep sleep");
+    return;
+  }
 
   // Deep sleep
   LOG_VERBOSE("[SLEEP] Deep sleep per 5 minuti");
@@ -269,7 +296,7 @@ bool sottoscriviTopics(const char *topics[]) {
       success = false;
       LOG_ERROR("[MQTT] ✗ ERRORE CRITICO: %s", topics[i]);
     }
-    
+
     totalTopics++;
     client.loop();
     delay(5);
@@ -339,10 +366,16 @@ MotivoSpegnimento gestisciConnessione() {
 }
 
 // ========== SETUP COMPLETO ==========
-MotivoSpegnimento setupCompleto(IPAddress ip, const char *mqtt_id, const char *topics[]) {
+MotivoSpegnimento setupCompleto(IPAddress ip, const char *mqtt_id,
+                                const char *topics[]) {
   m_ip = ip;
   m_topics = topics;
   strcpy(m_mqtt_id, mqtt_id);
+
+  if (!mqttTransport) {
+    setMqttTransport(DEFAULT_MQTT_TRANSPORT);
+  }
+
   setupWifi();   // 1️⃣ WiFi prima
   udpLogBegin(); // 2️⃣ poi inizializza UDP log
   LOG_VERBOSE("========================================");

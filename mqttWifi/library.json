@@ -1,12 +1,14 @@
 {
   "name": "mqttWifi",
-  "version": "1.0.2",
-  "description": "WiFi + MQTT connection manager for ESP8266/ESP32",
+  "version": "2.0.0",
+  "description": "WiFi + MQTT + ESPNow connection manager for ESP8266/ESP32",
   "keywords": [
     "mqtt",
     "wifi",
     "esp8266",
-    "esp32"
+    "esp32",
+    "espnow",
+    "connection"
   ],
   "frameworks": "arduino",
   "platforms": [

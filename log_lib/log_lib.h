@@ -10,7 +10,6 @@
 #endif
 
 #include <WiFiUdp.h>
-#include <stdarg.h>
 
 // ============================================================
 //  Configurazione Debug e Logger
@@ -108,9 +107,11 @@ enum MotivoSpegnimento {
   WIFI_FALLITO_RISVEGLIO = 6,
   NEXTION_SETUP_FAILED = 7,
   DHT_SETUP_FAILED = 8,
-  SETUP_OK = 253,
-  CONN_OK = 254,
-  SHUTDOWN_FROM_MQTT = 255
+  ONLY_DISCONNETS = 9, // usato per sonda meteo e test, non va in deep sleep
+  SETUP_OK = 252,
+  CONN_OK = 253,
+  SHUTDOWN_FROM_MQTT = 254,
+  CLEAN_SHUTDOWN = 255
 };
 extern MotivoSpegnimento m_wifi_status;
 enum RelayIdx {
