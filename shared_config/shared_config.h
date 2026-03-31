@@ -1,6 +1,20 @@
 #pragma once
 #include <Arduino.h>
 #include <log_lib.h>
+#ifdef ESP32_MQTT
+// ========== SELEZIONE TRASPORTO (GLOBAL) ==========
+// Rendi uno dei due attivo per tutta la rete:
+#define USE_MQTT_WIFI // Standard: WiFi + MQTT (Broker TCP)
+
+#else
+#define USE_MQTT_ESPNOW // Bridge: ESP-NOW -> ESP32 Gateway -> MQTT
+#endif
+// Canale WiFi fisso per ESP-NOW (deve coincidere col router)
+#define WIFI_CHANNEL_GATEWAY 12
+
+// MAC Address dell'ESP32 Gateway (da aggiornare dopo il primo boot del Gateway)
+const uint8_t ESPNOW_GATEWAY_MAC[6] = {0x58, 0xbf, 0x25, 0x36, 0xd2, 0xb0};
+
 enum SensIdx {
   INT = 0, // Interno (Chrono)
   EXT = 1, // Esterno (ESPmeteo)

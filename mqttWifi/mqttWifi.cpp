@@ -40,6 +40,12 @@ char m_mqtt_id[20];
 const char **m_topics = nullptr; // array topic fornito dal progetto
 // ========== GESTIONE PUBBLICAZIONE ==========
 bool publish(const char *topic, const char *message, bool retained) {
+  if (getMqttTransport() == MqttTransportType::ESPNOW) {
+    LOG_WARN(
+        "[PUBLISH] Invio stringa raw non consigliato in ESP-NOW. Usa binario.");
+    return false;
+  }
+
   if (!client.connected()) {
     LOG_ERROR("[PUBLISH] Client non connesso");
     return false;
@@ -67,6 +73,15 @@ bool publish(const char *topic, const char *message, bool retained) {
 
 bool publish(const char *topic, const uint8_t *payload, size_t length,
              bool retained) {
+  if (getMqttTransport() == MqttTransportType::ESPNOW) {
+    if (mqttTransport && mqttTransport->send(payload, length)) {
+      LOG_VERBOSE("[PUBLISH ESPNOW] OK\n");
+      return true;
+    }
+    LOG_ERROR("[PUBLISH ESPNOW] Fallimento invio\n");
+    return false;
+  }
+
   if (!client.connected()) {
     LOG_ERROR("[PUBLISH BIN] Client non connesso");
     return false;
@@ -92,40 +107,40 @@ bool publish(const char *topic, const uint8_t *payload, size_t length,
 
 // ========== LOG MOTIVO SPEGNIMENTO ==========
 void logMotivoSpegnimento(MotivoSpegnimento motivo) {
-  LOG_INFO("[SLEEP] Motivo: ");
+  Serial.print("[SLEEP] Motivo: ");
   switch (motivo) {
   case CLEAN_SHUTDOWN:
-    LOG_INFO("CLEAN SHUTDOWN");
+    Serial.println("CLEAN SHUTDOWN");
     break;
   case PUBLISH_FALLITO:
-    LOG_ERROR("PUBLISH FALLITO dopo 3 tentativi");
+    Serial.println("PUBLISH FALLITO dopo 3 tentativi");
     break;
   case COMANDO_SYSTEM_TOPIC:
-    LOG_VERBOSE("COMANDO via systemTopic (payload '0')");
+    Serial.println("COMANDO via systemTopic (payload '0')");
     break;
   case WIFI_TIMEOUT_CONNESSIONE:
-    LOG_ERROR("WiFi TIMEOUT dopo 3 tentativi");
+    Serial.println("WiFi TIMEOUT dopo 3 tentativi");
     break;
   case MQTT_TIMEOUT_CONNESSIONE:
-    LOG_ERROR("MQTT TIMEOUT dopo 3 tentativi");
+    Serial.println("MQTT TIMEOUT dopo 3 tentativi");
     break;
   case WIFI_FALLITO_SETUP:
-    LOG_ERROR("WiFi FALLITO durante setup");
+    Serial.println("WiFi FALLITO durante setup");
     break;
   case NEXTION_SETUP_FAILED:
-    LOG_ERROR("NEXTION INIT FAILLITO durante setup");
+    Serial.println("NEXTION INIT FAILLITO durante setup");
     break;
   case DHT_SETUP_FAILED:
-    LOG_ERROR("DHT INIT FAILLITO durante setup");
+    Serial.println("DHT INIT FAILLITO durante setup");
     break;
   case SHUTDOWN_FROM_MQTT:
-    LOG_INFO("SHUTDOWN FROM MQTT");
+    Serial.println("SHUTDOWN FROM MQTT");
     break;
   case ONLY_DISCONNETS:
-    LOG_INFO("ONLY DISCONNECTS: non entro in deep sleep");
+    Serial.println("ONLY DISCONNECTS: non entro in deep sleep");
     break;
   default:
-    LOG_WARN("SCONOSCIUTO");
+    Serial.println("SCONOSCIUTO");
     break;
   }
   Serial.flush();
@@ -194,10 +209,10 @@ void setupWifi() {
 #ifdef ESP8266_BUILD
   WiFi.setOutputPower(17);
   WiFi.forceSleepWake();
-  LOG_VERBOSE("[WiFi] Setup ESP8266");
+  Serial.println("[WiFi] Setup ESP8266");
 
 #elif ESP32_BUILD
-  LOG_VERBOSE("[WiFi] Setup ESP32 C3");
+  Serial.println("[WiFi] Setup ESP32");
   WiFi.setTxPower(WIFI_POWER_8_5dBm);
 
 #endif
@@ -209,7 +224,7 @@ void randomDelayAtBoot() {
   uint8_t mac[6];
   WiFi.macAddress(mac);
   unsigned long delayMs = ((mac[4] + mac[5]) % 100) * 10;
-  LOG_VERBOSE("[SETUP] Delay casuale: %lu ms\n", delayMs);
+  Serial.printf("[SETUP] Delay casuale: %lu ms\n", delayMs);
   delay(delayMs);
 }
 
@@ -220,13 +235,13 @@ bool connectWifi() {
     return true;
   }
 
-  LOG_VERBOSE("[WiFi] Tentativo %d/%d\n", tentativiWifi + 1, MAX_TENTATIVI);
+  Serial.printf("[WiFi] Tentativo %d/%d\n", tentativiWifi + 1, MAX_TENTATIVI);
   WiFi.begin(ssid, password);
   delay(200);
   uint32_t start = millis();
   while (WiFi.status() != WL_CONNECTED) {
     if (millis() - start > TIMEOUT_WIFI) {
-      LOG_WARN("[WiFi] TIMEOUT");
+      Serial.println("[WiFi] TIMEOUT");
       tentativiWifi++;
       return false;
     }
@@ -234,7 +249,7 @@ bool connectWifi() {
     // logSerialPrint(".");
   }
 
-  LOG_VERBOSE("\n[WiFi] ✓ Connesso a %s\n", WiFi.localIP().toString());
+  Serial.printf("\n[WiFi] ✓ Connesso a %s\n", WiFi.localIP().toString().c_str());
 
   tentativiWifi = 0; // Reset contatore
   delay(50);
@@ -252,7 +267,7 @@ bool connectMqtt() {
 
   String clientId = String(m_mqtt_id) + String(random(0xffff), HEX);
 
-  client.setServer(ipMqtt_server.toString().c_str(), mqtt_port);
+  client.setServer(ipMqtt_server, mqtt_port);
   client.setBufferSize(512);
 
   uint32_t start = millis();
@@ -318,14 +333,27 @@ bool sottoscriviTopics(const char *topics[]) {
 }
 
 MotivoSpegnimento gestisciConnessione() {
+  if (getMqttTransport() == MqttTransportType::ESPNOW) {
+    if (mqttTransport && mqttTransport->connect()) {
+      mqttTransport->keepAlive();
+      return CONN_OK;
+    } else {
+      LOG_WARN("[GESTIONE] Gateway ESP-NOW assente! Fallback a Transport WIFI...\n");
+      setMqttTransport(MqttTransportType::WIFI);
+      setupWifi();
+      udpLogBegin(); // Riparte l'infrastruttura di terra
+      // Ed entra normalmente nella cascata while WiFi -> MQTT qui sotto
+    }
+  }
+
   // ── WiFi ──────────────────────────────────────────────
   while (WiFi.status() != WL_CONNECTED) // ✅ while prima dell'if
   {
-    LOG_WARN("[GESTIONE] WiFi disconnesso, tentativo %d/%d\n",
+    Serial.printf("[GESTIONE] WiFi disconnesso, tentativo %d/%d\n",
              tentativiWifi + 1, MAX_TENTATIVI);
 
     if (connectWifi()) {
-      LOG_INFO("[GESTIONE] WiFi connesso dopo %d tentativi\n",
+      Serial.printf("[GESTIONE] WiFi connesso dopo %d tentativi\n",
                tentativiWifi + 1);
       tentativiWifi = 0;
       break; // ✅ connesso, esci dal while
@@ -333,7 +361,7 @@ MotivoSpegnimento gestisciConnessione() {
 
     tentativiWifi++;
     if (tentativiWifi >= MAX_TENTATIVI) {
-      LOG_ERROR("[GESTIONE] WiFi fallito dopo %d tentativi\n", MAX_TENTATIVI);
+      Serial.printf("[GESTIONE] WiFi fallito dopo %d tentativi\n", MAX_TENTATIVI);
       tentativiWifi = 0;
       return WIFI_TIMEOUT_CONNESSIONE;
     }
@@ -369,6 +397,13 @@ MotivoSpegnimento gestisciConnessione() {
   return CONN_OK;
 }
 
+int receive(uint8_t *buffer, size_t buflen) {
+  if (mqttTransport) {
+    return mqttTransport->receive(buffer, buflen);
+  }
+  return 0;
+}
+
 // ========== SETUP COMPLETO ==========
 MotivoSpegnimento setupCompleto(IPAddress ip, const char *mqtt_id,
                                 const char *topics[]) {
@@ -380,13 +415,23 @@ MotivoSpegnimento setupCompleto(IPAddress ip, const char *mqtt_id,
     setMqttTransport(DEFAULT_MQTT_TRANSPORT);
   }
 
-  setupWifi();   // 1️⃣ WiFi prima
-  udpLogBegin(); // 2️⃣ poi inizializza UDP log
-  LOG_VERBOSE("========================================");
-  LOG_VERBOSE("[SETUP] Avvio mqttWifi");
-  LOG_VERBOSE("========================================");
+  if (getMqttTransport() == MqttTransportType::ESPNOW) {
+    Serial.println("[SETUP] Inizializzazione trasporto ESP-NOW");
+    if (mqttTransport)
+      mqttTransport->init();
+  } else {
+    setupWifi();   // 1️⃣ WiFi prima
+    udpLogBegin(); // 2️⃣ poi inizializza UDP log
+  }
 
-  randomDelayAtBoot();
+  Serial.println("========================================");
+  Serial.printf("[SETUP] Avvio mqttWifi (Transport: %d)\n",
+              (int)getMqttTransport());
+  Serial.println("========================================");
+
+  if (getMqttTransport() == MqttTransportType::WIFI) {
+    randomDelayAtBoot();
+  }
 
   return gestisciConnessione();
 }

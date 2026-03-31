@@ -79,12 +79,12 @@
 typedef enum {
     TYPE_STATUS  = 0x01,   // generic status  (future use)
     TYPE_COMMAND = 0x02,   // command frame   (future use)
-    TYPE_DHT     = 0x03,   // DHT22   → struct dhtData
-    TYPE_METEO   = 0x03,   // Alias for 0x03 used in ESPmeteo
-    TYPE_DS18    = 0x04,   // DS18B20 → struct ds18Data
-    TYPE_BME     = 0x05,   // BME280  → struct bmeData
-    TYPE_PZEM    = 0x06,   // PZEM    → struct EneMainData
-    TYPE_TENDE   = 0x07,   // Blinds  → struct rendeData
+    TYPE_METEO   = 0x03,   // Stazione meteo outdoor (16 byte) → struct meteoData
+    TYPE_DHT     = 0x04,   // Sensori indoor (6 byte) → struct dhtData o ds18Data
+    TYPE_DS18    = 0x04,   // Alias per compatibilità, stesso formato di TYPE_DHT
+    TYPE_BME     = 0x05,   // BME280 (9 byte) → struct bmeData
+    TYPE_PZEM    = 0x06,   // PZEM energy meter (9 byte) → struct EneMainData
+    TYPE_TENDE   = 0x07,   // Tende Tuya (6 byte) → struct tendeData
     TYPE_UNKNOWN = 0xFF
 } PacketType;
 

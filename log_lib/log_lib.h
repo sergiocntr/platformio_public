@@ -38,30 +38,36 @@ void udpLogSend_f(const char *fmt, ...);
 template <typename T> inline String _toStr(T val) { return String(val); }
 inline String _toStr(IPAddress ip) { return ip.toString(); }
 
-#define LOG_ERROR(...) udpLogSend_f(__VA_ARGS__) // sempre attivo
+#define LOG_ERROR(fmt, ...) do { \
+    udpLogSend_f(fmt, ##__VA_ARGS__); \
+    if (Serial) { Serial.printf("[ERR] " fmt "\n", ##__VA_ARGS__); } \
+} while(0)
 
 #if DEBUG_LEVEL >= 1
-#define LOG_WARN(...) udpLogSend_f(__VA_ARGS__)
+#define LOG_WARN(fmt, ...) do { \
+    udpLogSend_f(fmt, ##__VA_ARGS__); \
+    if (Serial) { Serial.printf("[WRN] " fmt "\n", ##__VA_ARGS__); } \
+} while(0)
 #else
-#define LOG_WARN(...)                                                          \
-  do {                                                                         \
-  } while (0)
+#define LOG_WARN(...) do {} while (0)
 #endif
 
 #if DEBUG_LEVEL >= 2
-#define LOG_INFO(...) udpLogSend_f(__VA_ARGS__)
+#define LOG_INFO(fmt, ...) do { \
+    udpLogSend_f(fmt, ##__VA_ARGS__); \
+    if (Serial) { Serial.printf("[INF] " fmt "\n", ##__VA_ARGS__); } \
+} while(0)
 #else
-#define LOG_INFO(...)                                                          \
-  do {                                                                         \
-  } while (0)
+#define LOG_INFO(...) do {} while (0)
 #endif
 
 #if DEBUG_LEVEL >= 3
-#define LOG_VERBOSE(...) udpLogSend_f(__VA_ARGS__)
+#define LOG_VERBOSE(fmt, ...) do { \
+    udpLogSend_f(fmt, ##__VA_ARGS__); \
+    if (Serial) { Serial.printf("[VRB] " fmt "\n", ##__VA_ARGS__); } \
+} while(0)
 #else
-#define LOG_VERBOSE(...)                                                       \
-  do {                                                                         \
-  } while (0)
+#define LOG_VERBOSE(...) do {} while (0)
 #endif
 
 #elif defined(DEBUG_CHRONO)

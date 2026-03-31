@@ -26,10 +26,14 @@ public:
   virtual void keepAlive() = 0;
 };
 
+#include <shared_config.h>
+
 IMqttTransport *createMqttTransport(MqttTransportType type);
 
-#ifdef MQTT_TRANSPORT_TYPE
-static constexpr MqttTransportType DEFAULT_MQTT_TRANSPORT = MQTT_TRANSPORT_TYPE;
+#if defined(USE_MQTT_ESPNOW)
+static constexpr MqttTransportType DEFAULT_MQTT_TRANSPORT = MqttTransportType::ESPNOW;
+#elif defined(USE_MQTT_WIFI) || defined(MQTT_TRANSPORT_WIFI)
+static constexpr MqttTransportType DEFAULT_MQTT_TRANSPORT = MqttTransportType::WIFI;
 #else
 static constexpr MqttTransportType DEFAULT_MQTT_TRANSPORT = MqttTransportType::WIFI;
 #endif

@@ -16,8 +16,9 @@ void udpLogSend(const char *msg) {
 }
 
 void udpLogSend_f(const char *fmt, ...) {
-  if (m_wifi_status != CONN_OK)
+  if (m_wifi_status != CONN_OK || WiFi.status() != WL_CONNECTED)
     return;
+  
   char buf[192];
   va_list args;
   va_start(args, fmt);

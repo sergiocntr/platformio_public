@@ -2,12 +2,16 @@
 #include <Arduino.h>
 
 #if defined(ESP32)
-  #include <WiFi.h>
-  #include <esp_now.h>
+#include <WiFi.h>
+#include <esp_now.h>
 #elif defined(ESP8266)
-  #include <espnow.h>
+#include <ESP8266WiFi.h>
+extern "C" {
+#include "user_interface.h"
+}
+#include <espnow.h>
 #else
-  #error "EspNowManager: piattaforma non supportata (richiede ESP32 o ESP8266)"
+#error "EspNowManager: piattaforma non supportata (richiede ESP32 o ESP8266)"
 #endif
 
 /**
@@ -42,18 +46,18 @@ namespace EspNowManager {
 // ---------------------------------------------------------------------------
 // Costanti configurabili
 // ---------------------------------------------------------------------------
-
+static constexpr uint8_t ESPNOW_CHANNEL = 12;
 /** Numero massimo di peer registrabili (limite hardware ESP-NOW: 20). */
-static constexpr uint8_t  MAX_PEERS       = 20;
+static constexpr uint8_t MAX_PEERS = 20;
 
 /** Numero di slot nel buffer FIFO di ricezione. */
-static constexpr uint8_t  FIFO_DEPTH      = 8;
+static constexpr uint8_t FIFO_DEPTH = 8;
 
 /** Dimensione massima (byte) di un singolo messaggio nel FIFO. */
-static constexpr uint8_t  MAX_PACKET_SIZE = 128;
+static constexpr uint8_t MAX_PACKET_SIZE = 128;
 
 /** Dimensione massima consentita da ESP-NOW per payload. */
-static constexpr uint8_t  ESPNOW_MAX_LEN  = 250;
+static constexpr uint8_t ESPNOW_MAX_LEN = 250;
 
 // ---------------------------------------------------------------------------
 // Tipi pubblici
@@ -66,9 +70,8 @@ static constexpr uint8_t  ESPNOW_MAX_LEN  = 250;
  * @param data  Buffer dati ricevuto.
  * @param len   Lunghezza effettiva dei dati (<= MAX_PACKET_SIZE).
  */
-using ReceiveCallback = void (*)(const uint8_t* mac,
-                                 const uint8_t* data,
-                                 size_t         len);
+using ReceiveCallback = void (*)(const uint8_t *mac, const uint8_t *data,
+                                 size_t len);
 
 /**
  * @brief Callback opzionale invocata dopo ogni invio (dal contesto ISR).
@@ -77,26 +80,26 @@ using ReceiveCallback = void (*)(const uint8_t* mac,
  * @param mac      Indirizzo MAC del destinatario.
  * @param success  true se la consegna è avvenuta con successo.
  */
-using SendCallback = void (*)(const uint8_t* mac, bool success);
+using SendCallback = void (*)(const uint8_t *mac, bool success);
 
 /**
  * @brief Informazioni su un peer registrato.
  */
 struct PeerInfo {
-  uint8_t mac[6];   ///< Indirizzo MAC.
-  uint8_t channel;  ///< Canale Wi-Fi (0 = corrente).
-  bool    active;   ///< true se lo slot è occupato.
+  uint8_t mac[6];  ///< Indirizzo MAC.
+  uint8_t channel; ///< Canale Wi-Fi (0 = corrente).
+  bool active;     ///< true se lo slot è occupato.
 };
 
 /**
  * @brief Statistiche operative (utili per debug e monitoraggio).
  */
 struct Stats {
-  uint32_t rxTotal;      ///< Pacchetti ricevuti totali.
-  uint32_t rxDropped;    ///< Pacchetti scartati (FIFO pieno o dimensione).
-  uint32_t txTotal;      ///< Invii richiesti e presi in carico dallo stack.
-  uint32_t txFailed;     ///< Invii falliti (errore stack o parametri).
-  uint32_t txDelivered;  ///< Consegne confermate via SendCallback.
+  uint32_t rxTotal;     ///< Pacchetti ricevuti totali.
+  uint32_t rxDropped;   ///< Pacchetti scartati (FIFO pieno o dimensione).
+  uint32_t txTotal;     ///< Invii richiesti e presi in carico dallo stack.
+  uint32_t txFailed;    ///< Invii falliti (errore stack o parametri).
+  uint32_t txDelivered; ///< Consegne confermate via SendCallback.
 };
 
 // ---------------------------------------------------------------------------
@@ -125,7 +128,7 @@ void setSendCallback(SendCallback cb);
  * @param channel  Canale Wi-Fi (0 = canale corrente).
  * @return true se aggiunto con successo o già presente.
  */
-bool addPeer(const uint8_t* mac, uint8_t channel = 0);
+bool addPeer(const uint8_t *mac);
 
 /**
  * @brief Rimuove un peer dalla lista e dallo stack ESP-NOW.
@@ -133,12 +136,12 @@ bool addPeer(const uint8_t* mac, uint8_t channel = 0);
  * @param mac  Indirizzo MAC del peer da rimuovere.
  * @return true se rimosso con successo.
  */
-bool removePeer(const uint8_t* mac);
+bool removePeer(const uint8_t *mac);
 
 /**
  * @brief Verifica se un peer è già registrato.
  */
-bool hasPeer(const uint8_t* mac);
+bool hasPeer(const uint8_t *mac);
 
 /**
  * @brief Restituisce il numero di peer attualmente registrati.
@@ -151,7 +154,7 @@ uint8_t peerCount();
  * @param out      Array di PeerInfo da riempire (dimensione >= MAX_PEERS).
  * @param outCount Numero di peer scritti nell'array.
  */
-void getPeers(PeerInfo* out, uint8_t& outCount);
+void getPeers(PeerInfo *out, uint8_t &outCount);
 
 // ---------------------------------------------------------------------------
 // Ciclo di vita
@@ -194,7 +197,7 @@ uint8_t poll();
  * @param len   Lunghezza in byte (max ESPNOW_MAX_LEN = 250).
  * @return true se l'invio è stato preso in carico dallo stack.
  */
-bool send(const uint8_t* mac, const uint8_t* data, size_t len);
+bool send(const uint8_t *mac, const uint8_t *data, size_t len);
 
 // ---------------------------------------------------------------------------
 // Diagnostica

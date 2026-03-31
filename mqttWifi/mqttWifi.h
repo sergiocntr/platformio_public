@@ -60,6 +60,9 @@ bool publish(const char *topic, const uint8_t *payload, size_t length,
 // ========== GESTIONE PRINCIPALE (DA CHIAMARE NEL LOOP) ==========
 MotivoSpegnimento gestisciConnessione();
 
+// ========== RICEZIONE TRASPORTO (PER ACK/RISPOSTE) ==========
+int receive(uint8_t *buffer, size_t buflen);
+
 // ========== SETUP COMPLETO (DA CHIAMARE IN setup()) ==========
 MotivoSpegnimento setupCompleto(IPAddress ip, const char *mqtt_id,
                                 const char *topics[]);
