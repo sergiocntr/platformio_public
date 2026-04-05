@@ -7,7 +7,7 @@
 #else
 #define NEX_SERIAL Serial
 #endif
-extern void resetTendeTimer();
+extern void __attribute__((weak)) resetTendeTimer();
 namespace NexManager {
 
 void begin(unsigned long baud) {
@@ -158,7 +158,7 @@ TouchEvent poll() {
       val |= ((uint32_t)NEX_SERIAL.read() << (8 * i));
     for (int i = 0; i < 3; i++)
       NEX_SERIAL.read();
-    LOG_VERBOSE("[NexNum] %lu\n", val);
+    LOG_VERBOSE("[NexNum] %u\n", (unsigned int)val);
     break;
   }
   default:
@@ -171,55 +171,9 @@ TouchEvent poll() {
 // Ripopola il display Nextion dalla struttura stato.
 // Chiamare on-demand: al cambio di pagina o al ritorno su una pagina.
 void refreshCurrentPage() {
-
-  char buff[16];
-
-  if (stato.currPage == 0) {
-
-    stato.selectionMask =
-        0x1F; // Sempre reset a tutte selezionati gli slider tende
-    // Aggiorna testo data/ora
-    NexManager::sendFormatted("Ncurr_hour.txt=\"%s\"", stato.timeStr);
-    NexManager::sendFormatted("Nday.txt=\"%s\"", stato.dayStr);
-
-    // Aggiorna valori float
-    dtostrf(stato.temps[INT], 4, 1, buff);
-    NexManager::sendFormatted("Ntcurr.txt=\"%s\"", buff);
-
-    dtostrf(stato.temps[EXT], 4, 1, buff);
-    NexManager::sendFormatted("Nout_temp.txt=\"%s\"", buff);
-
-    dtostrf(stato.hums[EXT], 4, 1, buff);
-    NexManager::sendFormatted("Nout_hum.txt=\"%s\"", buff);
-
-    dtostrf(stato.hums[INT], 4, 1, buff);
-    NexManager::sendFormatted("Nin_hum.txt=\"%s\"", buff);
-
-    dtostrf(stato.waterTemp, 4, 1, buff);
-    NexManager::sendFormatted("Nwater_temp.txt=\"%s\"", buff);
-
-    // Potenza come intero
-    NexManager::sendFormatted("Nset_temp.txt=\"%d\"", stato.powerW);
-  } else if (stato.currPage == 1) {
-    
-    resetTendeTimer(); // <--- Lo mettiamo qui!
-    const char *sliderNames[] = {"pl_bar", "tl_bar", "ps_bar", "ts_bar",
-                                 "pc_bar"};
-
-    for (int i = 0; i < 5; i++) {
-      // La visibilità ora dipende dai bit impostati nella selectionMask
-      bool isSelected = (stato.selectionMask & (1 << i));
-      NexManager::sendFormatted("vis %s,%d", sliderNames[i], isSelected ? 1 :
-      0);
-
-      if (isSelected) {
-        NexManager::sendFormatted("%s.val=%d", sliderNames[i], stato.pos[i]);
-      }
-    }
-    NexManager::aggiornaSliderTende();
-    stato.selectionMask =
-        0x00; // Sempre reset a tutte deselezionate gli slider tende
-  }
+  // Questa funzione è ora vuota nella libreria condivisa per evitare conflitti
+  // tra progetti diversi (es. Chrono vs Bagno) che hanno nomi di oggetti diversi.
+  // La logica di aggiornamento deve essere gestita nel progetto specifico.
 }
 
 void aggiornaSliderTende() {

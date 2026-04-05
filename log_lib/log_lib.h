@@ -38,68 +38,66 @@ void udpLogSend_f(const char *fmt, ...);
 template <typename T> inline String _toStr(T val) { return String(val); }
 inline String _toStr(IPAddress ip) { return ip.toString(); }
 
-#define LOG_ERROR(fmt, ...) do { \
-    udpLogSend_f(fmt, ##__VA_ARGS__); \
-    if (Serial) { Serial.printf("[ERR] " fmt "\n", ##__VA_ARGS__); } \
-} while(0)
+// Macro helper per gestire la seriale: se Nextion è attivo, non scriviamo sulla seriale
+#if defined(USE_NEXTION) || defined(DISABLE_SERIAL_LOG)
+  #define _SERIAL_LOG(prefix, fmt, ...) // Nessun output seriale
+#else
+  #define _SERIAL_LOG(prefix, fmt, ...) if (Serial) { Serial.printf(prefix fmt "\n", ##__VA_ARGS__); }
+#endif
+
+#define LOG_ERROR(fmt, ...)                                                    \
+  do {                                                                         \
+    udpLogSend_f(fmt, ##__VA_ARGS__);                                          \
+    _SERIAL_LOG("[ERR] ", fmt, ##__VA_ARGS__)                                 \
+  } while (0)
 
 #if DEBUG_LEVEL >= 1
-#define LOG_WARN(fmt, ...) do { \
-    udpLogSend_f(fmt, ##__VA_ARGS__); \
-    if (Serial) { Serial.printf("[WRN] " fmt "\n", ##__VA_ARGS__); } \
-} while(0)
+#define LOG_WARN(fmt, ...)                                                     \
+  do {                                                                         \
+    udpLogSend_f(fmt, ##__VA_ARGS__);                                          \
+    _SERIAL_LOG("[WRN] ", fmt, ##__VA_ARGS__)                                 \
+  } while (0)
 #else
 #define LOG_WARN(...) do {} while (0)
 #endif
 
 #if DEBUG_LEVEL >= 2
-#define LOG_INFO(fmt, ...) do { \
-    udpLogSend_f(fmt, ##__VA_ARGS__); \
-    if (Serial) { Serial.printf("[INF] " fmt "\n", ##__VA_ARGS__); } \
-} while(0)
+#define LOG_INFO(fmt, ...)                                                     \
+  do {                                                                         \
+    udpLogSend_f(fmt, ##__VA_ARGS__);                                          \
+    _SERIAL_LOG("[INF] ", fmt, ##__VA_ARGS__)                                 \
+  } while (0)
 #else
 #define LOG_INFO(...) do {} while (0)
 #endif
 
 #if DEBUG_LEVEL >= 3
-#define LOG_VERBOSE(fmt, ...) do { \
-    udpLogSend_f(fmt, ##__VA_ARGS__); \
-    if (Serial) { Serial.printf("[VRB] " fmt "\n", ##__VA_ARGS__); } \
-} while(0)
+#define LOG_VERBOSE(fmt, ...)                                                  \
+  do {                                                                         \
+    udpLogSend_f(fmt, ##__VA_ARGS__);                                          \
+    _SERIAL_LOG("[VRB] ", fmt, ##__VA_ARGS__)                                 \
+  } while (0)
 #else
 #define LOG_VERBOSE(...) do {} while (0)
 #endif
 
 #elif defined(DEBUG_CHRONO)
-// Seriale classica
+// Seriale classica (solo se UDP è spento)
 #define logSerial Serial
 #define logSerialBegin(a) logSerial.begin(a)
 #define logSerialPrint(a) logSerial.print(a)
-#define LOG_ERROR(...) logSerial.printf(__VA_ARGS__)
-#define LOG_WARN(...) logSerial.printf(__VA_ARGS__)
-#define LOG_INFO(...) logSerial.printf(__VA_ARGS__)
-#define LOG_VERBOSE(...) logSerial.printf(__VA_ARGS__)
-
+#if defined(USE_NEXTION) || defined(DISABLE_SERIAL_LOG)
+  #define LOG_ERROR(...) do {} while (0)
+  #define LOG_WARN(...) do {} while (0)
+  #define LOG_INFO(...) do {} while (0)
+  #define LOG_VERBOSE(...) do {} while (0)
 #else
-// Produzione — tutto sparisce
-#define logSerialBegin(a)                                                      \
-  do {                                                                         \
-  } while (0)
-#define logSerialPrint(a)                                                      \
-  do {                                                                         \
-  } while (0)
-#define LOG_ERROR(...)                                                         \
-  do {                                                                         \
-  } while (0)
-#define LOG_WARN(...)                                                          \
-  do {                                                                         \
-  } while (0)
-#define LOG_INFO(...)                                                          \
-  do {                                                                         \
-  } while (0)
-#define LOG_VERBOSE(...)                                                       \
-  do {                                                                         \
-  } while (0)
+  #define LOG_ERROR(...) logSerial.printf(__VA_ARGS__)
+  #define LOG_WARN(...) logSerial.printf(__VA_ARGS__)
+  #define LOG_INFO(...) logSerial.printf(__VA_ARGS__)
+  #define LOG_VERBOSE(...) logSerial.printf(__VA_ARGS__)
+#endif
+
 #endif
 
 // ========== ENUM MOTIVI SPEGNIMENTO ==========
