@@ -1,0 +1,87 @@
+[
+    {
+        "id": "setup_constants",
+        "type": "function",
+        "z": "probe_sim_flow",
+        "name": "json to global",
+        "func": "// ============================================\n// Nodo: JSON_to_Globals  (v3)\n// Riceve msg.payload = config JSON (oggetto o stringa)\n// Registra tutte le variabili globali usate dai nodi\n// XOR_validation e Packet_Decoder.\n// ============================================\n\nlet config = msg.payload;\nif (typeof config === \"string\") {\n    try { config = JSON.parse(config); }\n    catch(e) { node.error(\"JSON non valido: \" + e.message); return null; }\n}\nif (!config || typeof config !== \"object\") {\n    node.error(\"msg.payload non è un oggetto di configurazione valido\");\n    return null;\n}\n\n// ── 1. Costanti protocollo ────────────────────────────────────────────────────\nglobal.set(\"PKT_MAGIC\",       config.PROTO.MAGIC);\nglobal.set(\"PKT_VERSION\",     config.PROTO.VERSION);\nglobal.set(\"HEADER_SIZE\",     config.PROTO.HEADER_SIZE);\nglobal.set(\"PACKET_MIN_SIZE\", config.PROTO.MIN_SIZE);\n\n// ── 2. Scaling factors ────────────────────────────────────────────────────────\nglobal.set(\"ENC_TEMP_FACTOR\",  config.SCALING.TEMP_FACTOR);\nglobal.set(\"ENC_TEMP_OFFSET\",  config.SCALING.TEMP_OFFSET);\nglobal.set(\"ENC_HUM_FACTOR\",   config.SCALING.HUM_FACTOR);\nglobal.set(\"ENC_PRESS_FACTOR\", config.SCALING.PRESS_FACTOR);\n\n// ── 3. Packet types + mappa inversa ──────────────────────────────────────────\nconst typeMap = {};\nfor (const [key, value] of Object.entries(config.TYPES)) {\n    global.set(`TYPE_${key}`, value);\n    typeMap[value] = key;\n}\nglobal.set(\"TYPE_NAME_MAP\", typeMap);\n\n// ── 4. Device IDs + mappa inversa ────────────────────────────────────────────\nconst deviceMap = {};\nfor (const [key, value] of Object.entries(config.DEVICES)) {\n    global.set(`DEVICE_${key}`, value);\n    deviceMap[value] = key;\n}\nglobal.set(\"DEVICE_NAME_MAP\", deviceMap);\n\n// ── 5. Enumerazioni opzionali ─────────────────────────────────────────────────\nif (config.COMMANDS)       global.set(\"COMMANDS\",       config.COMMANDS);\nif (config.TENDE_COMMANDS) global.set(\"TENDE_COMMANDS\", config.TENDE_COMMANDS);\nif (config.ACK_STATES)     global.set(\"ACK_STATES\",     config.ACK_STATES);\n\n// ── 6. Parser specs (intero oggetto) ─────────────────────────────────────────\n// Il Packet_Decoder legge PARSER_SPECS direttamente.\n// Ogni spec può avere formato:\n//   { name: \"...\", fields: [...] }   ← nuovo formato con metadati\n//   [...]                            ← vecchio formato array diretto\nglobal.set(\"PARSER_SPECS\", config.PARSER_SPECS);\n\n// Espone anche le singole spec come globali separate (comodo per debug)\nfor (const [typeName, spec] of Object.entries(config.PARSER_SPECS)) {\n    global.set(`PARSER_SPEC_${typeName}`, spec);\n}\n\n// ── 7. Report ─────────────────────────────────────────────────────────────────\nconst specCount   = Object.keys(config.PARSER_SPECS).length;\nconst deviceCount = Object.keys(config.DEVICES).length;\nconst typeCount   = Object.keys(config.TYPES).length;\n\nnode.log(`✅ Globals caricati: proto=v${config.PROTO.VERSION} | tipi=${typeCount} | devices=${deviceCount} | specs=${specCount}`);\nnode.status({ fill: \"green\", shape: \"dot\", text: `OK – ${specCount} specs, ${deviceCount} devices` });\n\nmsg.payload = {\n    status:  \"ok\",\n    specs:   Object.keys(config.PARSER_SPECS),\n    devices: Object.keys(config.DEVICES)\n};\nreturn msg;",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 540,
+        "y": 60,
+        "wires": [
+            [
+                "3cf0e0fe927cd7a2"
+            ]
+        ]
+    },
+    {
+        "id": "c6a31f10a4d0be01",
+        "type": "inject",
+        "z": "probe_sim_flow",
+        "name": "",
+        "props": [
+            {
+                "p": "payload"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": true,
+        "onceDelay": "0",
+        "topic": "",
+        "payload": "",
+        "payloadType": "date",
+        "x": 90,
+        "y": 60,
+        "wires": [
+            [
+                "43d486017bb5e5f1"
+            ]
+        ]
+    },
+    {
+        "id": "43d486017bb5e5f1",
+        "type": "file in",
+        "z": "probe_sim_flow",
+        "name": "buffer spec json reader",
+        "filename": "/mnt/f2fs/NODERED/buffer_config/config.json",
+        "filenameType": "str",
+        "format": "utf8",
+        "chunk": false,
+        "sendError": false,
+        "encoding": "none",
+        "allProps": false,
+        "x": 330,
+        "y": 60,
+        "wires": [
+            [
+                "setup_constants"
+            ]
+        ]
+    },
+    {
+        "id": "3cf0e0fe927cd7a2",
+        "type": "debug",
+        "z": "probe_sim_flow",
+        "name": "debug 5",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "false",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 800,
+        "y": 60,
+        "wires": []
+    }
+]

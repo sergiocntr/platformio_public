@@ -1,0 +1,176 @@
+Il nodo function "JSON to Globals"
+Ecco il codice completo del nodo funzione che legge il tuo JSON e crea tutte le variabili globali:
+
+javascript
+// ============================================
+// Nodo: JSON to Globals
+// Riceve msg.payload = il tuo config.json
+// Crea tutte le variabili globali organizzate
+// ============================================
+
+const config = msg.payload;
+
+if (!config) {
+    node.error("Configurazione non valida o vuota");
+    return msg;
+}
+
+// ============================================
+// 1. PROTOCOL CONSTANTS (livello radice)
+// ============================================
+global.set("PKT_MAGIC", config.PROTO.MAGIC);
+global.set("PKT_VERSION", config.PROTO.VERSION);
+global.set("HEADER_SIZE", config.PROTO.HEADER_SIZE);
+global.set("PACKET_MIN_SIZE", config.PROTO.MIN_SIZE);
+
+// ============================================
+// 2. SCALING FACTORS
+// ============================================
+global.set("ENC_TEMP_FACTOR", config.SCALING.TEMP_FACTOR);
+global.set("ENC_TEMP_OFFSET", config.SCALING.TEMP_OFFSET);
+global.set("ENC_HUM_FACTOR", config.SCALING.HUM_FACTOR);
+global.set("ENC_PRESS_FACTOR", config.SCALING.PRESS_FACTOR);
+
+// ============================================
+// 3. PACKET TYPES (come costanti)
+// ============================================
+for (const [key, value] of Object.entries(config.TYPES)) {
+    global.set(`TYPE_${key}`, value);
+}
+// Comodo anche avere una mappa inversa (numero → nome)
+const typeMap = {};
+for (const [key, value] of Object.entries(config.TYPES)) {
+    typeMap[value] = key;
+}
+global.set("TYPE_NAME_MAP", typeMap);
+
+// ============================================
+// 4. DEVICE IDs
+// ============================================
+for (const [key, value] of Object.entries(config.DEVICES)) {
+    global.set(`DEVICE_${key}`, value);
+}
+// Mappa inversa per debugging
+const deviceMap = {};
+for (const [key, value] of Object.entries(config.DEVICES)) {
+    deviceMap[value] = key;
+}
+global.set("DEVICE_NAME_MAP", deviceMap);
+
+// ============================================
+// 5. PARSER SPECS (per buffer-parser)
+// ============================================
+// Salva l'intero oggetto PARSER_SPECS per uso dinamico
+global.set("PARSER_SPECS", config.PARSER_SPECS);
+
+// Crea anche singole specifiche per ogni tipo
+for (const [typeName, spec] of Object.entries(config.PARSER_SPECS)) {
+    global.set(`PARSER_SPEC_${typeName}`, spec);
+}
+
+// ============================================
+// 6. UTILITY: Funzione per decodificare payloads
+// ============================================
+// Questa funzione può essere chiamata da altri nodi
+global.set("decodePacket", (buffer, packetType) => {
+    const specKey = `TYPE_${packetType}`;
+    const spec = global.get("PARSER_SPECS")[specKey];
+    
+    if (!spec) {
+        return { error: `No parser spec for type ${packetType}` };
+    }
+    
+    // Qui puoi implementare la decodifica usando buffer-parser
+    // o logica custom
+    const result = {};
+    for (const field of spec) {
+        let value;
+        switch (field.type) {
+            case "uint8":
+                value = buffer.readUInt8(field.offset);
+                break;
+            case "uint16le":
+                value = buffer.readUInt16LE(field.offset);
+                break;
+            case "int16le":
+                value = buffer.readInt16LE(field.offset);
+                break;
+            case "floatle":
+                value = buffer.readFloatLE(field.offset);
+                break;
+            default:
+                value = null;
+        }
+        
+        // Applica scaling se definito
+        if (field.scale) {
+            // Puoi valutare espressioni come "/128 - 50"
+            try {
+                value = eval(`${value} ${field.scale}`);
+            } catch(e) {
+                node.warn(`Scaling error for ${field.name}: ${e.message}`);
+            }
+        }
+        
+        result[field.name] = value;
+    }
+    return result;
+});
+
+// ============================================
+// 7. REPORT FINALE (per debug)
+// ============================================
+node.log("✅ Configurazione caricata con successo!");
+node.log(`   - Protocollo: v${config.PROTO.VERSION}, Magic: 0x${config.PROTO.MAGIC.toString(16)}`);
+node.log(`   - Tipi pacchetto: ${Object.keys(config.TYPES).length}`);
+node.log(`   - Dispositivi: ${Object.keys(config.DEVICES).length}`);
+node.log(`   - Parser specs: ${Object.keys(config.PARSER_SPECS).length}`);
+
+return msg;
+Come usare le variabili globali create
+Una volta eseguito il setup, in QUALSIASI altro nodo potrai accedere alle variabili:
+
+Esempio 1: Verificare un magic byte
+javascript
+// In qualsiasi nodo function
+const expectedMagic = global.get("PKT_MAGIC"); // 170
+if (msg.payload[0] !== expectedMagic) {
+    node.warn("Magic byte non corrisponde!");
+}
+Esempio 2: Decodificare un pacchetto DHT
+javascript
+const decodeFn = global.get("decodePacket");
+const decoded = decodeFn(msg.payload, global.get("TYPE_DHT")); // TYPE_DHT = 4
+
+if (!decoded.error) {
+    msg.temperature = decoded.temperature;
+    msg.humidity = decoded.humidity;
+    msg.deviceName = global.get("DEVICE_NAME_MAP")[decoded.deviceID];
+}
+return msg;
+Esempio 3: Ottenere la spec per buffer-parser
+javascript
+// Se usi node-red-contrib-buffer-parser
+const dhtSpec = global.get("PARSER_SPEC_TYPE_3"); // o TYPE_3 come nel tuo JSON
+msg.specification = dhtSpec;
+return msg;
+Vantaggi di questo approccio
+✅ Centralizzazione totale: Tutte le costanti in un unico JSON
+✅ Auto-documentante: I nomi delle variabili sono chiari (TYPE_DHT, DEVICE_DEV_CAMINETTO)
+✅ Mappe bidirezionali: Puoi passare da ID a nome e viceversa
+✅ Utility integrate: La funzione decodePacket è disponibile globalmente
+✅ Facile debugging: Il log mostra cosa è stato caricato
+✅ Estensibile: Aggiungi nuove sezioni al JSON e modifichi solo questo nodo
+
+Un piccolo miglioramento: gestione default
+Se vuoi essere ancora più robusto, aggiungi un controllo per chiavi mancanti:
+
+javascript
+// Versione con default
+const safeGet = (obj, path, defaultValue) => {
+    return path.split('.').reduce((o, p) => o && o[p] ? o[p] : defaultValue, obj);
+};
+
+// Esempio
+const magic = safeGet(config, 'PROTO.MAGIC', 0xAA);
+Ora hai un sistema perfettamente integrato! Il tuo file JSON è l'unico source of truth, e Node-RED lo trasforma automaticamente in variabili globali pronte all'uso. 🎯

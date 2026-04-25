@@ -4,10 +4,14 @@
 #ifdef ESP32_MQTT
 // ========== SELEZIONE TRASPORTO (GLOBAL) ==========
 // Rendi uno dei due attivo per tutta la rete:
+#ifndef USE_MQTT_WIFI
 #define USE_MQTT_WIFI // Standard: WiFi + MQTT (Broker TCP)
+#endif
 
 #else
+#ifndef USE_MQTT_ESPNOW
 #define USE_MQTT_ESPNOW // Bridge: ESP-NOW -> ESP32 Gateway -> MQTT
+#endif
 #endif
 // Canale WiFi fisso per ESP-NOW (deve coincidere col router)
 #define WIFI_CHANNEL_GATEWAY 12
@@ -31,7 +35,7 @@ enum Tende {
 constexpr int NUM_TENDE = 5;
 // Enum per i comandi delle tende
 enum ComandoTende {
-
+  T_POS = 3,    // Parziale (percentuale)
   T_STOP = 15,  // st_cr id 15
   T_OPEN = 16,  // up_cr id 16
   T_CLOSE = 17, // dw_cr id 17
@@ -39,6 +43,7 @@ enum ComandoTende {
 extern ComandoTende comandoTenda;
 
 struct __attribute__((packed)) SystemState {
+	bool sensor_alive[MAX_SENS]; // specifica se il sensore e' funzionante (true) o no (false)
   float temps[MAX_SENS];
   float hums[MAX_SENS];
   float waterTemp;
@@ -52,3 +57,32 @@ struct __attribute__((packed)) SystemState {
 };
 
 extern SystemState stato;
+/* Usage (C/C++):
+ *   const char *nome = WEEKDAY_SHORT[d->day];   // "DOM", "LUN", …
+ *   const char *nome = WEEKDAY_LONG[d->day];    // "Domenica", …
+ *
+ * The same index is used in struct timeData::day (PacketProtocol.h).
+ */
+ 
+/** 3-letter abbreviations (uppercase, Italian) */
+static const char * const WEEKDAY_SHORT[7] = {
+    "DOM",  /* 0 – Sunday    */
+    "LUN",  /* 1 – Monday    */
+    "MAR",  /* 2 – Tuesday   */
+    "MER",  /* 3 – Wednesday */
+    "GIO",  /* 4 – Thursday  */
+    "VEN",  /* 5 – Friday    */
+    "SAB"   /* 6 – Saturday  */
+};
+ 
+/** Full Italian names */
+static const char * const WEEKDAY_LONG[7] = {
+    "Domenica",   /* 0 */
+    "Lunedi",     /* 1 */
+    "Martedi",    /* 2 */
+    "Mercoledi",  /* 3 */
+    "Giovedi",    /* 4 */
+    "Venerdi",    /* 5 */
+    "Sabato"      /* 6 */
+};
+ 

@@ -1,0 +1,393 @@
+
+// ==========================================
+// FILE: /media/progetti_ext/PROJECT/Platformio/finiti/nodecaldaia/src/impostazioni.cpp
+// ==========================================
+
+#include <impostazioni.h>
+
+// Stato globale del sistema
+SystemState stato;
+
+// Topics MQTT a cui il nodo si sottoscrive
+const char *PROGETTO_TOPICS[] = {
+    espNowBridgeBuffer,
+    espNowBridgeCmd,
+    espNowBridgeAck,
+    nullptr             // Mandatory sentinel
+};
+
+
+
+// ==========================================
+// FILE: /media/progetti_ext/PROJECT/Platformio/finiti/nodecaldaia/src/temp.h
+// ==========================================
+
+#pragma once
+#include <Arduino.h>
+
+namespace tempSensors {
+
+// Inizializza il sensore DS18B20
+bool setupSensors();
+
+// Legge la temperatura dell'acqua e la posizione della valvola
+void getLocalData();
+
+} // namespace tempSensors
+
+
+
+// ==========================================
+// FILE: /media/progetti_ext/PROJECT/Platformio/finiti/nodecaldaia/src/impostazioni.h
+// ==========================================
+
+#pragma once
+#include <Arduino.h>
+#include <shared_config.h>
+#include <topic.h>
+
+// Pin della caldaia (dal pin.h originale)
+#define ONE_WIRE_BUS D1
+#define relayCaldaia D6
+#define relayAcqua D7
+#define resetPin D5
+#define alarmPin D2
+#define valvePin A0
+
+extern const char *PROGETTO_TOPICS[];
+const unsigned long acs_max_on_time = 300000L; // 5 minuti max
+extern unsigned long last_acs_start_time;
+const unsigned long time_between_sensors = 300000L;         // 5 minuti
+const unsigned long time_between_sensors_if_acs_on = 5000L; // 5 secondi
+const unsigned long time_between_wifi_check = 60000L;       // 1 minuto
+
+
+
+// ==========================================
+// FILE: /media/progetti_ext/PROJECT/Platformio/finiti/nodecaldaia/src/main.h
+// ==========================================
+
+#pragma once
+#include <Arduino.h>
+#include <impostazioni.h>
+#include <mqttWifiMessages.h>
+#include <temp.h>
+
+bool elapsed(unsigned long &last_time, unsigned long interval);
+   
+
+
+
+// ==========================================
+// FILE: /media/progetti_ext/PROJECT/Platformio/finiti/nodecaldaia/src/mqttWifiMessages.h
+// ==========================================
+
+#pragma once
+#include <Arduino.h>
+#include "impostazioni.h"
+#include <mqttWifi.h> // Shared MQTT & WiFi logic
+
+namespace mqttWifi {
+
+// Configura la callback MQTT
+void setCallback();
+
+// Callback che gestisce il traffico in ingresso (binario e legacy)
+void callback(char *topic, byte *payload, unsigned int length);
+
+// Invia lo stato attuale (temperatura e valvola) via PacketProtocol
+void sendData();
+
+} // namespace mqttWifi
+
+
+
+// ==========================================
+// FILE: /media/progetti_ext/PROJECT/Platformio/finiti/nodecaldaia/src/temp.cpp
+// ==========================================
+
+#include "temp.h"
+#include "impostazioni.h"
+#include <DallasTemperature.h>
+#include <OneWire.h>
+#include <log_lib.h>
+
+OneWire oneWire(ONE_WIRE_BUS);
+DallasTemperature sensors(&oneWire);
+unsigned long last_acs_start_time = 0;
+namespace tempSensors {
+bool setupSensors() {
+  sensors.begin();
+  if (sensors.getDeviceCount() == 0) {
+    LOG_ERROR("[TEMP] Nessun sensore DS18B20 trovato!");
+    stato.sensor_alive[0] = false;
+    return false;
+  }
+  LOG_INFO("[TEMP] DS18B20 inizializzato correttamente");
+  stato.sensor_alive[0] = true;
+  return true;
+}
+
+void getLocalData() { 
+  sensors.requestTemperatures();
+  float t = sensors.getTempCByIndex(0);
+
+  // Filtriamo letture errate tipiche del DS18B20
+  if (t != 85.0 && t != -127.0) {
+    stato.waterTemp = t;
+    stato.sensor_alive[0] = true;
+  } else {
+    LOG_WARN("[TEMP] Errore lettura temperatura");
+    stato.sensor_alive[0] = false;
+  }
+
+  // Lettura analogica della posizione valvola gas (0-1023)
+  stato.powerW = analogRead(valvePin);
+
+  // Se la valvola è attiva (powerW > 100), lo stato verrà gestito nel loop principale
+  LOG_VERBOSE("[TEMP] Acqua: %.1f°C, Valvola: %d", stato.waterTemp, stato.powerW);
+}
+
+
+} // namespace tempSensors
+
+
+
+// ==========================================
+// FILE: /media/progetti_ext/PROJECT/Platformio/finiti/nodecaldaia/src/main.cpp
+// ==========================================
+
+#include "main.h"
+#include "impostazioni.h"
+#include <log_lib.h>
+#include <mqttWifi.h>
+#include <myIP.h>
+
+unsigned long t_sens = 0;
+unsigned long t_acs = 0;
+unsigned long t_wifi_check = 0;
+
+bool elapsed(unsigned long &last_time, unsigned long interval) {
+  unsigned long now = millis();
+  if (now - last_time >= interval || now < last_time) {
+    last_time = now;
+    return true;
+  }
+  return false;
+}
+
+void scaldaacqua() {
+  if (stato.waterTemp < 3.0) {
+    // 1. Azione locale antighiaccio
+    LOG_WARN("[ANTIFREEZE] Temperatura critica: %.1f. Avvio caldaia...",
+             stato.waterTemp);
+
+    uint32_t nowTime = millis();
+    stato.relays[RISCALDAMENTO] = true;
+    digitalWrite(relayCaldaia, LOW); // LOW = ON
+    // 2. Avviso la rete: "Ragazzi, mi sono ACCESA per i fatti miei"
+    mqttWifi::sendBinaryAck(CTRL_HEAT_SYSTEM, CMD_POWER_ON, true);
+
+    while (stato.waterTemp < 10.0) {
+      tempSensors::getLocalData();
+      // mqttWifi::sendData(); // Telemetria live durante il ciclo
+      delay(1000);
+      mqttWifi::loop();
+
+      if ((millis() - nowTime) >
+          60000L) { // 1 minuti max (maggiorato da 20s per inerzia termica)
+        LOG_ERROR("[ANTIFREEZE] Timeout raggiunto! Temp ancora bassa: %.1f",
+                  stato.waterTemp);
+        break;
+      }
+    }
+
+    LOG_INFO("[ANTIFREEZE] Fine ciclo. Temperatura: %.1f", stato.waterTemp);
+    stato.relays[RISCALDAMENTO] = false;
+    digitalWrite(relayCaldaia, HIGH); // OFF
+
+    mqttWifi::sendBinaryAck(CTRL_HEAT_SYSTEM, CMD_POWER_ON, false);
+    mqttWifi::loop();
+    delay(100);
+  }
+}
+
+void setup() {
+  // 1. Configurazione IO Actuators
+  pinMode(relayCaldaia, OUTPUT);
+  digitalWrite(relayCaldaia, HIGH); // OFF (Common Positive)
+  pinMode(relayAcqua, OUTPUT);
+  digitalWrite(relayAcqua, HIGH); // OFF
+  pinMode(resetPin, OUTPUT);
+  digitalWrite(resetPin, LOW);
+  pinMode(alarmPin, INPUT_PULLUP);
+
+  // 2. Inizializzazione Log e Seriale
+  Serial.begin(38400);
+  delay(3000); // Attesa stabilizzazione seriale
+  LOG_INFO("[SYSTEM] Caldaia avviata (PacketProtocol v3)");
+
+  // 3. Inizializzazione Sensori e Controllo Antifelo immediato
+  // Deve funzionare anche se il WiFi non è ancora connesso o assente
+  tempSensors::setupSensors();
+  tempSensors::getLocalData();
+  if (stato.sensor_alive[0])
+    scaldaacqua();
+
+  // 4. Setup WiFi e MQTT via Shared Library
+  mqttWifi::setCallback();
+  mqttWifi::setupCompleto(ipCaldaia, caldaiaId, PROGETTO_TOPICS,
+                          DEV_CALDAIA_DS18B20);
+
+  LOG_INFO("[SYSTEM] Setup completato. Pronto per ricevere comandi.");
+  if (stato.sensor_alive[0]) {
+    LOG_INFO(
+        "[SYSTEM] Sensore temperatura attivo. Temperatura iniziale: %.1f°C",
+        stato.waterTemp);
+  } else {
+    LOG_ERROR("[SYSTEM] Sensore temperatura non rilevato o non funzionante.");
+  }
+}
+
+void loop() {
+  unsigned long now = millis();
+
+  // 1. Manutenzione timers: se la caldaia sta bruciando (powerW > 100), 
+  // resettiamo il timeout ACS (il countdown partirà solo allo spegnimento del burner)
+  if (stato.powerW > 100) {
+    last_acs_start_time = now;
+  }
+
+  // 2. Controllo timeout ACS (se attivo)
+  if (stato.relays[ACQUA] == true) {
+    if ((now - last_acs_start_time) >= acs_max_on_time) {
+      stato.relays[ACQUA] = false;
+      digitalWrite(relayAcqua, HIGH); // OFF
+      mqttWifi::sendBinaryAck(CTRL_HOT_WATER, CMD_POWER_OFF, false);
+      mqttWifi::loop();
+      LOG_INFO("[ACS] Spento per timeout");
+    }
+  }
+
+  mqttWifi::loop();
+  yield(); // su ESP8266
+
+  // 3. Timer sensori (intervallo dinamico: 5s se ACS attiva, 5min altrimenti)
+  unsigned long sens_interval = (stato.relays[ACQUA] == true)
+                                    ? time_between_sensors_if_acs_on
+                                    : time_between_sensors;
+
+  if (elapsed(t_sens, sens_interval)) {
+    tempSensors::getLocalData();
+    if (stato.sensor_alive[0]) {
+      // Controllo antighiaccio e invio telemetria
+      scaldaacqua();
+      mqttWifi::sendData();
+    } else {
+      LOG_ERROR("[SYSTEM] Sensore temperatura non attivo. Ciclo skippato.");
+    }
+  }
+
+  // 4. Timer telemetria periodica (solo se ACS è accesa o ogni X tempo se necessario)
+  // Il timer sensori già invia telemetria ogni 5s se ACS è on, quindi questo è superfluo
+  // ma lo teniamo per consistenza col flusso originale.
+  if (stato.relays[ACQUA] == true) {
+    if (elapsed(t_acs, time_between_sensors_if_acs_on)) {
+      mqttWifi::sendData();
+    }
+  }
+
+  // 5. Watchdog WiFi
+  if (elapsed(t_wifi_check, time_between_wifi_check)) {
+    mqttWifi::gestisciConnessione();
+  }
+}
+
+
+// ==========================================
+// FILE: /media/progetti_ext/PROJECT/Platformio/finiti/nodecaldaia/src/mqttWifiMessages.cpp
+// ==========================================
+
+#include "mqttWifiMessages.h"
+#include <ESP8266httpUpdate.h>
+#include <PacketProtocol.h>
+#include <log_lib.h>
+
+namespace mqttWifi {
+
+static bool onPacket(const ParsedPacket &pkt);
+
+void setCallback() {
+  client.setCallback(callback);
+  registerPacketHandler(onPacket);
+}
+
+static bool onPacket(const ParsedPacket &pkt) {
+  switch (pkt.header.type) {
+  case TYPE_COMMAND: {
+    const cmdData *d = (const cmdData *)pkt.payload;
+    bool on = (d->value == 1);
+    if (d->deviceID == CTRL_HEAT_SYSTEM) {
+      if (stato.relays[RISCALDAMENTO] != on) {
+        stato.relays[RISCALDAMENTO] = on;
+        digitalWrite(relayCaldaia, on ? LOW : HIGH);
+        LOG_INFO("[CMD] RISCALDAMENTO: %s", on ? "ON" : "OFF");
+        sendBinaryAck(CTRL_HEAT_SYSTEM, d->command, on);
+        sendData(); // Aggiorna telemetria
+      }
+      return true;
+    } else if (d->deviceID == CTRL_HOT_WATER) {
+      if (stato.relays[ACQUA] != on) {
+        last_acs_start_time = millis();
+        stato.relays[ACQUA] = on;
+        digitalWrite(relayAcqua, on ? LOW : HIGH);
+        LOG_INFO("[CMD] ACQUA CALDA: %s", on ? "ON" : "OFF");
+        sendBinaryAck(CTRL_HOT_WATER, d->command, on);
+        sendData(); // Aggiorna telemetria
+      }
+      return true;
+    }
+    break;
+  }
+
+  case TYPE_TIME: {
+    const timeData *d = (const timeData *)pkt.payload;
+    sprintf(stato.timeStr, "%02d:%02d", d->hour, d->minute);
+    LOG_VERBOSE("[TIME] Sync: %s", stato.timeStr);
+    return true;
+  }
+
+  default:
+    break;
+  }
+  return false;
+}
+
+void callback(char *topic, byte *payload, unsigned int length) {
+  LOG_VERBOSE("[CALLBACK] Topic: %s (Len: %d)", topic, length);
+
+  if (strcmp(topic, espNowBridgeBuffer) == 0 || 
+      strcmp(topic, espNowBridgeCmd) == 0 ||
+      strcmp(topic, espNowBridgeAck) == 0) {
+    pp_dispatchPacket(payload, length);
+    return;
+  }
+}
+
+void sendData() {
+  boilerData data;
+  data.deviceID = DEV_CALDAIA_DS18B20;
+  data.temperature = PP_ENCODE_TEMP(stato.waterTemp);
+  data.valvePos = stato.powerW;
+
+  uint8_t buffer[HEADER_SIZE + sizeof(boilerData) + 1];
+  size_t packetSize =
+      pp_buildPacket(TYPE_BOILER, (uint8_t *)&data, sizeof(boilerData), buffer);
+
+  LOG_VERBOSE("[SEND] Boiler T: %.1f, V: %d", stato.waterTemp, stato.powerW);
+  publish(espNowBridgeBuffer, buffer, packetSize, false);
+}
+
+} // namespace mqttWifi
+
+

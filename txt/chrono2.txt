@@ -1,0 +1,557 @@
+
+// ==========================================
+// FILE: /media/progetti_ext/PROJECT/Platformio/finiti/chrono2/src_crono_bagno/PageHandlers.h
+// ==========================================
+
+#pragma once
+#include <impostazioni.h>
+#include <mqttWifi.h>
+#include <topic.h>
+#include "NexManager.h"
+
+
+namespace PageHandlers {
+
+void handleHomePage(NexManager::TouchEvent &evt);
+void updateBlink();
+
+} // namespace PageHandlers
+
+
+
+// ==========================================
+// FILE: /media/progetti_ext/PROJECT/Platformio/finiti/chrono2/src_crono_bagno/impostazioni.cpp
+// ==========================================
+
+#include "impostazioni.h"
+#include <topic.h>
+
+tempStr myTemp;
+
+SystemState stato;
+
+// Lista topic MQTT a cui questo progetto si sottoscrive (terminata da nullptr)
+const char *PROGETTO_TOPICS[] = {
+    espNowBridgeBuffer,
+    nullptr // OBBLIGATORIO: sentinella di fine array
+};
+
+
+
+// ==========================================
+// FILE: /media/progetti_ext/PROJECT/Platformio/finiti/chrono2/src_crono_bagno/temp.h
+// ==========================================
+
+#pragma once
+#include <Arduino.h>
+#include <DallasTemperature.h>
+#include <OneWire.h>
+#include <impostazioni.h>
+#include <mqttWifi.h>
+#include <topic.h>
+#include "NexManager.h" // Per aggiornare il valore sul display
+namespace tempSensors {
+
+extern DallasTemperature DS18B20;
+
+bool setupSensors();
+void getLocalData();
+
+} // namespace tempSensors
+
+
+
+// ==========================================
+// FILE: /media/progetti_ext/PROJECT/Platformio/finiti/chrono2/src_crono_bagno/impostazioni.h
+// ==========================================
+
+#pragma once
+#ifndef IMPOSTAZIONI_CHRONO_H
+#define IMPOSTAZIONI_CHRONO_H
+#include <Arduino.h>
+#include <log_lib.h>
+#include <shared_config.h>
+struct tempStr {
+  float t;
+  float h;
+  uint8_t confort;
+};
+extern tempStr myTemp;
+extern const char* PROGETTO_TOPICS[]; // array topic MQTT del progetto, terminato da nullptr
+
+#endif
+
+
+// ==========================================
+// FILE: /media/progetti_ext/PROJECT/Platformio/finiti/chrono2/src_crono_bagno/main.h
+// ==========================================
+
+#pragma once
+#include "FS.h"
+#include <DallasTemperature.h>
+#include <mqttWifi.h>
+#include <PacketProtocol.h>
+#include <Nextion.h>
+#include <NexxFloat.h>
+#include "Nextion.h"
+#include "NexxFloat.h"
+#include "SD.h"  //package builtin configuration file
+#include "SPI.h" //package builtin configuration file
+#include <myIP.h>
+#include <password.h>
+#include <topic.h>
+const uint16_t versione = 160;
+const uint8_t TYPE_BAGNO = 0x06;
+uint8_t db_array_value[4] = {0}; // ris 1 acqua 2 alarm 3
+// char buffer[15]={0};
+boolean AlarmOn = false; // ALLARME ACQUA IN SPEGNIMENTO
+boolean CaldOn = false;  // ACQUA IN RISCALDAMENTO
+// extern boolean AcqOn;   // E' STATA CHIESTA ACQUA CALDA
+// extern boolean RisOn;   // E' STATA CHIESTA ACQUA CALDA
+
+NexText Nday = NexText(0, 5, "NtxtDay");
+NexxFloat NtxtStanza = NexxFloat(0, 6, "NtxtStanza");
+NexText NtxtAcq = NexText(0, 4, "NtxtAcq");
+NexText NtxtOra = NexText(0, 3, "NtxtOra");
+NexCrop NcrAcq = NexCrop(0, 2, "NcrAcq");
+NexCrop NcrRis = NexCrop(0, 1, "NcrRis");
+// NexCrop NcrAlert            = NexCrop(0, 1, "NcrAlert");
+NexTouch *nex_listen_list[] = {&NcrRis, &NcrAcq,
+                               // &NcrAlert,
+                               NULL};
+
+// WiFi e MQTT sono ora gestiti dal namespace mqttWifi
+using mqttWifi::client;
+
+uint8_t mqttOK = 0;
+uint32_t wifi_initiate = 0;
+
+
+const uint8_t ONE_WIRE_BUS = D7;
+OneWire oneWire(ONE_WIRE_BUS);
+DallasTemperature DS18B20(&oneWire);
+
+void reconnect();
+void checkConn();
+void callback(char *topic, byte *payload, unsigned int length);
+void nex_routines();
+void Nwater_onPushCallback(void *ptr);
+void Nrisc_onPushCallback(void *ptr);
+void Nb_downPushCallback(void *ptr);
+void Nb_upPushCallback(void *ptr);
+void update_buttons();
+uint8_t toggle_button(int value);
+void stampaDebug(int8_t intmess);
+
+void smartDelay(unsigned long mytime);
+void getLocalData();
+void blinkLed(uint8_t volte);
+void adessoDormo();
+void setupWifi();
+void checkForUpdates();
+void toggle_alarm();
+void toggle_acq();
+
+
+
+// ==========================================
+// FILE: /media/progetti_ext/PROJECT/Platformio/finiti/chrono2/src_crono_bagno/mqttWifiMessages.h
+// ==========================================
+
+#pragma once
+#include <Arduino.h>
+#include <impostazioni.h>
+#include <mqttWifi.h>
+
+namespace mqttWifi {
+
+void setCallback();
+void sendData();
+void callback(char *topic, byte *payload, unsigned int length);
+
+} // namespace mqttWifi
+
+
+
+
+// ==========================================
+// FILE: /media/progetti_ext/PROJECT/Platformio/finiti/chrono2/src_crono_bagno/PageHandlers.cpp
+// ==========================================
+
+#include "PageHandlers.h"
+
+
+namespace PageHandlers {
+// Resetta il timer: da chiamare all'ingresso in pagina 1 e su ogni touch.
+
+
+
+
+void handleHomePage(NexManager::TouchEvent &evt) {
+    if (evt.component == 1) { // NcrRis (Riscaldamento)
+        // Invia comando MQTT binario (l'icona si aggiornerà alla ricezione dell'ACK)
+        mqttWifi::sendBinaryCommand(CTRL_HEAT_SYSTEM, !stato.relays[RISCALDAMENTO]);
+        LOG_VERBOSE("[PAGE] Invio comando RISCALDAMENTO: %d", !stato.relays[RISCALDAMENTO]);
+        
+    } else if (evt.component == 2) { // NcrAcq (Acqua)
+        // Invia comando MQTT binario
+        mqttWifi::sendBinaryCommand(CTRL_HOT_WATER, !stato.relays[ACQUA]);
+        LOG_VERBOSE("[PAGE] Invio comando ACQUA: %d", !stato.relays[ACQUA]);
+    }
+}
+
+void updateBlink() {
+    static uint8_t acqBlinkState = 0;
+    
+    // 1. ALLARME (ACQUA SI STA PER SPEGNERE?)
+    if (stato.relays[ALLARME]) {
+        // Toggles between pic 1 and 3 (Punto esclamativo)
+        acqBlinkState = (acqBlinkState == 1) ? 3 : 1;
+        NexManager::sendFormatted("NcrAcq.picc=%d", acqBlinkState);
+    } 
+    // 2. CALDAIA ATTIVA + ACQUA RICHIESTA (LAMPEGGIO ROSSO)
+    if (stato.powerW > 100) {
+        // Se la caldaia non sta scaldando ma lo stato di acqua e' attivo, mostra icona rossa fissa (pic 2) . Super!
+        acqBlinkState = (acqBlinkState == 1) ? 2 : 1;
+        NexManager::sendFormatted("NcrAcq.picc=%d", acqBlinkState);
+    }else NexManager::sendFormatted("NcrAcq.picc=%d", 2); 
+}
+
+} // namespace PageHandlers
+
+
+
+// ==========================================
+// FILE: /media/progetti_ext/PROJECT/Platformio/finiti/chrono2/src_crono_bagno/temp.cpp
+// ==========================================
+
+#include "temp.h"
+#include "mqttWifiMessages.h"
+
+namespace tempSensors {
+
+const uint8_t ONE_WIRE_BUS = D7;
+OneWire oneWire(ONE_WIRE_BUS);
+DallasTemperature DS18B20(&oneWire);
+
+bool setupSensors() {
+  DS18B20.begin();
+  // Un check veloce per vedere se il sensore risponde
+  DS18B20.requestTemperatures();
+  float temp = DS18B20.getTempCByIndex(0);
+  if (temp == 85.0 || temp == -127.0) {
+    LOG_WARN("[TEMP] Dallas non trovato o lettura errata: %f", temp);
+    return false;
+  }
+  
+  // Inizializzazione variabili globali
+  myTemp.t = temp;
+  myTemp.h = 0; // Il bagno ha solo temperatura
+  myTemp.confort = 0;
+
+  LOG_INFO("[TEMP] Sensor found. Init temp: %f", temp);
+  return true;
+}
+
+void getLocalData() {
+  float temp = 22.22;
+  DS18B20.requestTemperatures();
+  delay(10);
+  temp = DS18B20.getTempCByIndex(0);
+  
+  if (temp == 85.0 || temp == (-127.0)) {
+    temp = 22.22;
+  }
+  
+  // Arrotondamento e offset come nell'originale
+  temp = roundf(temp * 100) / 100;
+  temp -= 2;
+  
+  // Aggiornamento stato per logica locale e PacketProtocol
+  stato.temps[BAG] = temp;
+  myTemp.t = temp;
+  myTemp.h = 0;       // Solo temperatura nel bagno
+  myTemp.confort = 0; // Bitmask comfort non disponibile o non usata qui
+
+  // Invio tramite binario (PacketProtocol) via mqttWifiMessages
+  mqttWifi::sendData();
+  
+  // Aggiornamento display tramite NexManager
+  NexManager::sendFormatted("NtxtStanza.val=%d", (int)(temp * 10));
+  
+  LOG_INFO("[TEMP] Local Temp: %.2f (Buffer sent)", temp);
+  NexManager::refreshCurrentPage();
+}
+
+} // namespace tempSensors
+
+
+
+
+// ==========================================
+// FILE: /media/progetti_ext/PROJECT/Platformio/finiti/chrono2/src_crono_bagno/main.cpp
+// ==========================================
+
+#include "NexManager.h"
+#include "PageHandlers.h"
+#include "mqttWifi.h"
+#include "mqttWifiMessages.h"
+#include "temp.h"
+#include <Arduino.h>
+#include <impostazioni.h>
+
+// Definizione variabili globali necessarie per il linker
+MotivoSpegnimento m_wifi_status;
+
+// Variabili di timing
+uint32_t t_sensors = 0;
+const uint32_t time_between_sensors_reads = 120000L; // 2 minuti
+
+void smartDelay(unsigned long mytime) {
+  uint32_t adesso = millis();
+  static uint32_t blinkTimer = 0;
+
+  while ((millis() - adesso) < mytime) {
+    // 1. MQTT loop
+    mqttWifi::loop();
+
+    // 2. Poll Nextion per eventi touch
+    NexManager::TouchEvent evt = NexManager::poll();
+    if (evt.isValid) {
+      if (evt.page == 0) {
+        PageHandlers::handleHomePage(evt);
+      }
+    }
+
+    // 3. Gestione lampeggi (Alarms/Acqua)
+    // Avviene se la richiesta di acqua calda e' attiva (stato.relays[ACQUA])
+    // lo stato della valvola viene memorizzato ogni volta che arriva la temperatura dellla caldaia
+
+    if ((millis() - blinkTimer) > 300 && stato.relays[ACQUA]) {
+      PageHandlers::updateBlink();
+      blinkTimer = millis();
+    }
+
+    delay(10);
+  }
+}
+
+void setup() {
+  delay(3000); // inizializzazione generale
+
+#if ESP32_BUILD
+  // ===== DISABILITAZIONE BLUETOOTH COMPLETA =====
+
+  // 1. T_STOP il Bluetooth Classic
+  btStop();
+
+// 2. Deinizializza il controller (livello più basso)
+#if CONFIG_BT_ENABLED
+  // Rilascia la memoria BT per il WiFi
+  esp_bt_mem_release(ESP_BT_MODE_BTDM);
+  LOG_VERBOSE("Bluetooth disabilitato e memoria rilasciata");
+
+#endif
+#endif
+
+  // Inizializzazione Nextion (Light library)
+  NexManager::begin(38400);
+
+    // Imposta la callback MQTT definita nel modulo dedicato EARLY 
+  mqttWifi::setCallback();
+  // Inizializzazione WiFi e MQTT tramite libreria condivisa
+  m_wifi_status = mqttWifi::setupCompleto(ipBagno, bagnoId, PROGETTO_TOPICS, DEV_BAGNO_DS18B20);
+  if (m_wifi_status != CONN_OK) {
+    LOG_ERROR("[SETUP] Connessione FALLITA. Motivo: %d", m_wifi_status);
+    NexManager::shutdownNextion();
+    mqttWifi::adessoDormo(8, m_wifi_status);
+  }
+
+  LOG_VERBOSE("Setup wifi OK");
+  LOG_INFO("[SETUP] WiFi/MQTT OK");
+
+  // Inizializzazione sensore Dallas
+  if (!tempSensors::setupSensors()) {
+    LOG_WARN("[SETUP] Sensore Dallas non pronto");
+  }
+  //Annuncio per chiedere a Node Red la posizione delle tende
+
+  mqttWifi::sendAnnounce(); // Invia un TYPE_ANNOUNCE [6]
+    
+  NexManager::refreshCurrentPage();
+  LOG_VERBOSE("End of Setup - Announce Sent");
+
+  // Prima lettura sensori
+  tempSensors::getLocalData();
+  t_sensors = millis();
+  NexManager::wakeupNextion();
+  LOG_INFO("[SETUP] DS18B20 OK");
+  LOG_INFO("[SETUP] Nextion OK");
+  LOG_INFO("[SETUP] Completato");
+}
+
+void loop() {
+  // Controllo connessione
+  m_wifi_status = mqttWifi::gestisciConnessione();
+  if (m_wifi_status != CONN_OK) {
+    NexManager::shutdownNextion();
+    mqttWifi::adessoDormo(8, m_wifi_status);
+  }
+
+  // Lettura periodica temperatura
+  if (millis() - t_sensors > time_between_sensors_reads) {
+    tempSensors::getLocalData();
+    t_sensors = millis();
+  }
+
+  // Delay intelligente che gestisce eventi UI e MQTT
+  smartDelay(10000);
+}
+
+
+
+// ==========================================
+// FILE: /media/progetti_ext/PROJECT/Platformio/finiti/chrono2/src_crono_bagno/mqttWifiMessages.cpp
+// ==========================================
+
+#include "mqttWifiMessages.h"
+#include "NexManager.h"
+#include <mqttWifi.h>
+
+// Variabili di stato globali definite in main.h
+//boolean AcqOn = false;
+//boolean RisOn = false;
+
+namespace mqttWifi {
+
+// ========== HOOK PACCHETTI PROGETTO ==========
+// Gestisce i pacchetti binari PacketProtocol specifici del nodo Bagno.
+// I comandi broadcast (SLEEP, UPDATE, RESET) e TYPE_ACK
+// sono già intercettati da mqttWifi::pp_dispatchPacket().
+//
+// NOTA MIGRAZIONE: il nodo Bagno usava ancora topic stringa legacy
+// (acquaTopic, riscaldaTopic, extSensTopic con JSON) e il comando
+// SLEEP su systemTopic. Tutto questo è stato sostituito con
+// TYPE_COMMAND via PacketProtocol. I relay acqua/riscaldamento
+// ora arrivano come TYPE_COMMAND con deviceID CTRL_HOT_WATER /
+// CTRL_HEAT_SYSTEM, identicamente a chrono2.
+// La telemetria caldaia arriva come TYPE_BOILER.
+// L'ora arriva come TYPE_TIME.
+static bool onPacket(const ParsedPacket &pkt); // forward declaration
+
+void setCallback() {
+  client.setCallback(callback);
+  registerPacketHandler(
+      onPacket); // registra l'hook project-specific nel dispatcher
+}
+void sendData() {
+  dhtData data;
+
+  data.deviceID = DEV_BAGNO_DS18B20;
+  data.humidity = PP_ENCODE_HUM(myTemp.h);
+  data.temperature = PP_ENCODE_TEMP(myTemp.t);
+  data.comfort = myTemp.confort;
+
+  // Prepariamo il pacchetto standard (Header 5B + 1 deviceID + 2 humidity + 2
+  // temperature + 1 comfort + Checksum 1B = 12B)
+  uint8_t packetBuffer[HEADER_SIZE + sizeof(dhtData) + 1];
+  size_t packetSize =
+      pp_buildPacket(TYPE_DHT, (uint8_t *)&data, sizeof(dhtData), packetBuffer);
+
+  LOG_VERBOSE("[SENDDATA] Invio dati binari (Dev: %u, Size: %d) su topic: %s\n",
+              DEV_BAGNO_DS18B20, packetSize, espNowBridgeBuffer);
+
+  if (publish(espNowBridgeBuffer, packetBuffer, packetSize, false))
+    LOG_INFO("[SENDDATA] ✓ Dati binari inviati con successo");
+  else
+    LOG_ERROR("[SENDDATA] ✗ Invio binario fallito");
+}
+static bool onPacket(const ParsedPacket &pkt) {
+
+  switch (pkt.header.type) {
+
+  case TYPE_TIME: {
+    const timeData *d = (const timeData *)pkt.payload;
+    char timeStr[8];
+    snprintf(timeStr, sizeof(timeStr), "%02d:%02d", d->hour, d->minute);
+    const char *dayShort = (d->day < 7) ? WEEKDAY_SHORT[d->day] : "???";
+    NexManager::sendFormatted("%s.txt=\"%s\"", "NtxtOra", timeStr);
+    NexManager::sendFormatted("%s.txt=\"%s\"", "NtxtDay", dayShort);
+    LOG_VERBOSE("[PKT] TIME: %s %s\n", dayShort, timeStr);
+    return true;
+  }
+
+  case TYPE_ACK: {
+    const ackData *d = (const ackData *)pkt.payload;
+    bool on = (d->valEcho != 0);
+    uint8_t picVal = on ? 2 : 0;
+
+    if (d->deviceID == CTRL_HOT_WATER) {
+      //AcqOn = on;
+      stato.relays[ACQUA] = on;
+      NexManager::sendFormatted("%s.picc=%d", "NcrAcq", picVal);
+      LOG_VERBOSE("[ACK] CONFIRM ACQUA: %d\n", on);
+    } else if (d->deviceID == CTRL_HEAT_SYSTEM) {
+      //RisOn = on;
+      stato.relays[RISCALDAMENTO] = on;
+      NexManager::sendFormatted("%s.picc=%d", "NcrRis", picVal);
+      LOG_VERBOSE("[ACK] CONFIRM RISCALDAMENTO: %d\n", on);
+    }
+    return true;
+  }
+
+  case TYPE_COMMAND: {
+    // Relay acqua e riscaldamento — stessa logica di chrono2
+    const cmdData *d = (const cmdData *)pkt.payload;
+    bool on = (d->value != 0);
+    uint8_t picVal =
+        on ? 2 : 0; // 0=icona verde (spento), 2=icona rossa (acceso)
+
+    if (d->deviceID == CTRL_HOT_WATER) {
+      //AcqOn = on;
+      stato.relays[ACQUA] = on;
+      NexManager::sendFormatted("%s.picc=%d", "NcrAcq", picVal);
+      LOG_VERBOSE("[PKT] CMD FEEDBACK ACQUA: %d\n", on);
+
+    } else if (d->deviceID == CTRL_HEAT_SYSTEM) {
+      //RisOn = on;
+      stato.relays[RISCALDAMENTO] = on;
+      NexManager::sendFormatted("%s.picc=%d", "NcrRis", picVal);
+      LOG_VERBOSE("[PKT] CMD FEEDBACK RISCALDAMENTO: %d\n", on);
+    } 
+    return true;
+  }
+
+  case TYPE_BOILER: {
+    // Temperatura acqua caldaia (sostituisce il vecchio JSON su extSensTopic)
+    const boilerData *d = (const boilerData *)pkt.payload;
+    float t = PP_DECODE_TEMP(d->temperature);
+    char acqStr[6];
+    dtostrf(t, 4, 1, acqStr);
+    NexManager::sendFormatted("%s.txt=\"%s\"", "NtxtAcq", acqStr);
+    LOG_VERBOSE("[PKT] Caldaia Temp: %.1f\n", t);
+// Memorizziamo la posizione della valvola del gas ,per modificare la visualizzazione nel loop()
+      stato.powerW = d->valvePos;
+    return true;
+  }
+
+  default:
+    LOG_WARN("[PKT] PacketType non gestito da bagno: 0x%02X\n",
+             pkt.header.type);
+    return false;
+  }
+}
+
+// ========== CALLBACK MQTT ==========
+// Unica responsabilità: indirizzare il topic al dispatcher.
+void callback(char *topic, byte *payload, unsigned int length) {
+  LOG_VERBOSE("[CALLBACK] Topic: %s (Len: %d)\n", topic, length);
+
+  if (strcmp(topic, espNowBridgeBuffer) == 0) {
+    mqttWifi::pp_dispatchPacket(payload, length);
+  }
+}
+
+} // namespace mqttWifi
+
+

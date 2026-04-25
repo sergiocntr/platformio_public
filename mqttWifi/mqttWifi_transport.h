@@ -21,6 +21,7 @@ public:
   virtual bool isConnected() = 0;
 
   virtual bool send(const uint8_t *data, size_t len) = 0;
+  virtual bool sendBroadcast(const uint8_t *data, size_t len) = 0;
   virtual int receive(uint8_t *buffer, size_t buflen) = 0;
 
   virtual void keepAlive() = 0;

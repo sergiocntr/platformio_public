@@ -1,0 +1,137 @@
+[
+    {
+        "id": "b08729f24bdef954",
+        "type": "mqtt in",
+        "z": "cfb69e5ea50e09c1",
+        "name": "espNowBridge/buffer",
+        "topic": "homie/espNowBridge/buffer",
+        "qos": "0",
+        "datatype": "auto-detect",
+        "broker": "2a66be145c853355",
+        "nl": false,
+        "rap": true,
+        "rh": 0,
+        "inputs": 0,
+        "x": 120,
+        "y": 80,
+        "wires": [
+            [
+                "9f44673f9fca5cbc"
+            ]
+        ]
+    },
+    {
+        "id": "9f44673f9fca5cbc",
+        "type": "function",
+        "z": "cfb69e5ea50e09c1",
+        "name": "buffer_parser",
+        "func": "// ============================================\n// UNIVERSAL PACKET DECODER v2.0\n// Unisce:\n// - ACK binario + Telegram alarms (nodo1)\n// - Decodifica dichiarativa via PARSER_SPECS (nodo2)\n// - Gestione METEO multi-record + version check\n// ============================================\n\n// ─── Costanti dalle globali ──────────────────────────────────────────────\nconst PROTO = global.get(\"PROTO\");\nconst SCALING = global.get(\"SCALING\");\nconst TYPES = global.get(\"TYPES\");\nconst DEVICES = global.get(\"DEVICES\");\nconst ACK_STATES = global.get(\"ACK_STATES\");\nconst PARSER_SPECS = global.get(\"PARSER_SPECS\");\nconst DEVICE_NAME_MAP = global.get(\"DEVICE_NAME_MAP\");\nconst TYPE_NAME_MAP = global.get(\"TYPE_NAME_MAP\");\n\n// Fallback per compatibilità\nconst PKT_MAGIC = PROTO?.MAGIC ?? 170;\nconst PKT_VERSION = PROTO?.VERSION ?? 2;\nconst HEADER_SIZE = PROTO?.HEADER_SIZE ?? 5;\nconst PACKET_MIN_SIZE = PROTO?.MIN_SIZE ?? 6;\n\nconst ACK_OK = ACK_STATES?.ACK_OK ?? 1;\nconst ACK_END = ACK_STATES?.ACK_END ?? 2;\nconst ACK_FAILED = ACK_STATES?.ACK_FAILED ?? 3;\nconst ACK_ERROR = ACK_STATES?.ACK_ERROR ?? 4;\n\nconst TYPE_ACK = TYPES?.ACK ?? 0;\nconst TYPE_METEO = TYPES?.METEO ?? 3;\n\nconst DEV_MASTER = DEVICES?.NODE_RED ?? 255;\nconst TELEGRAM_CHAT_ID = -1001197831676;  // fisso dal tuo codice\n\n// ─── Helper: Validazione XOR ────────────────────────────────────────────\nfunction validateXOR(buffer) {\n    let xor = 0;\n    for (let i = 0; i < buffer.length - 1; i++) xor ^= buffer[i];\n    return xor === buffer[buffer.length - 1];\n}\n\n// ─── Helper: Build ACK binario (v2.1 con cmdEcho/valEcho) ───────────────\nfunction buildBinaryAck(targetDeviceId, status, cmdEcho = 0, valEcho = 0) {\n    const frame = Buffer.alloc(HEADER_SIZE + 4 + 1);\n    frame[0] = PKT_MAGIC;\n    frame[1] = PKT_VERSION;\n    frame[2] = TYPE_ACK;\n    frame.writeUInt16LE(4, 3);        // payload length = 4\n    frame[5] = targetDeviceId;\n    frame[6] = status;\n    frame[7] = cmdEcho;\n    frame[8] = valEcho;\n\n    let xor = 0;\n    for (let i = 0; i < frame.length - 1; i++) xor ^= frame[i];\n    frame[frame.length - 1] = xor;\n    return frame;\n}\n\n// ─── Helper: Decodifica dichiarativa via PARSER_SPECS ───────────────────\nfunction decodeBySpec(buffer, packetType) {\n    const typeKey = `TYPE_${packetType}`;\n    const typeSpec = PARSER_SPECS?.[typeKey];\n    \n    if (!typeSpec) {\n        return { error: `No spec for ${typeKey}`, decoded: null };\n    }\n    \n    const fields = typeSpec.fields || typeSpec;\n    const result = {};\n    \n    for (const field of fields) {\n        if (field.offset >= buffer.length) {\n            result[field.name] = null;\n            continue;\n        }\n        \n        let value;\n        try {\n            switch (field.type) {\n                case \"uint8\":    value = buffer.readUInt8(field.offset); break;\n                case \"uint16le\": value = buffer.readUInt16LE(field.offset); break;\n                case \"uint16be\": value = buffer.readUInt16BE(field.offset); break;\n                case \"int16le\":  value = buffer.readInt16LE(field.offset); break;\n                case \"int16be\":  value = buffer.readInt16BE(field.offset); break;\n                case \"uint32le\": value = buffer.readUInt32LE(field.offset); break;\n                case \"int32le\":  value = buffer.readInt32LE(field.offset); break;\n                case \"floatle\":  value = buffer.readFloatLE(field.offset); break;\n                case \"floatbe\":  value = buffer.readFloatBE(field.offset); break;\n                default:\n                    node.warn(`Tipo non gestito: ${field.type} per ${field.name}`);\n                    continue;\n            }\n        } catch(e) {\n            node.warn(`Lettura fallita ${field.name}: ${e.message}`);\n            result[field.name] = null;\n            continue;\n        }\n        \n        // Scaling\n        if (field.div !== undefined && value !== null) value = value / field.div;\n        if (field.sub !== undefined && value !== null) value = value - field.sub;\n        \n        // Arrotonda a 2 decimali\n        if (typeof value === \"number\" && !Number.isInteger(value)) {\n            value = Math.round(value * 100) / 100;\n        }\n        \n        result[field.name] = value;\n    }\n    \n    return { error: null, decoded: result };\n}\n\n// ─── Helper: Invia allarme Telegram ─────────────────────────────────────\nfunction sendTelegramAlert(message) {\n    return {\n        payload: {\n            chatId: TELEGRAM_CHAT_ID,\n            type: 'message',\n            content: message\n        }\n    };\n}\n\n// ─── Helper: Comfort decoder per DHT (opzionale, se non in spec) ────────\nfunction decodeComfort(bitmask) {\n    return {\n        ok: (bitmask & 1) !== 0,\n        tooHot: (bitmask & 2) !== 0,\n        tooCold: (bitmask & 4) !== 0,\n        tooDry: (bitmask & 8) !== 0,\n        tooHumid: (bitmask & 16) !== 0\n    };\n}\n\n// ─── Helper: Verifica se il pacchetto è METEO multi-record (66 byte) ────\nfunction isMultiMeteoPacket(fullBuffer, payloadLength) {\n    const type = fullBuffer[2];\n    return type === TYPE_METEO && payloadLength === 66;\n}\n\n// ─── Helper: Ottiene nome dispositivo ───────────────────────────────────\nfunction getDeviceName(deviceId) {\n    if (DEVICE_NAME_MAP && DEVICE_NAME_MAP[deviceId]) {\n        return DEVICE_NAME_MAP[deviceId];\n    }\n    // Cerca nel reverse di DEVICES\n    for (const [name, id] of Object.entries(DEVICES || {})) {\n        if (id === deviceId) return name;\n    }\n    return `0x${deviceId.toString(16).toUpperCase()}`;\n}\n\n// ============================================\n// MAIN\n// ============================================\n\nconst fullBuffer = msg.payload;\nlet alarmMsg = null;\nlet ackMsg = null;\n\n// ─── 1. Validazione base ────────────────────────────────────────────────\nif (!Buffer.isBuffer(fullBuffer) || fullBuffer.length < PACKET_MIN_SIZE) {\n    node.error(\"Pacchetto troppo piccolo o non Buffer\");\n    return [null, sendTelegramAlert(\"❌ ERRORE: Pacchetto malformato (size < MIN_SIZE)\"), null];\n}\n\nif (fullBuffer[0] !== PKT_MAGIC) {\n    node.error(\"Magic byte errato\");\n    return [null, sendTelegramAlert(`❌ ERRORE: Magic byte errato (0x${fullBuffer[0].toString(16)})`), null];\n}\n\n// ─── 2. Validazione XOR ─────────────────────────────────────────────────\nif (!msg.xorValidated && !validateXOR(fullBuffer)) {\n    node.error(\"Checksum XOR fallito\");\n    alarmMsg = sendTelegramAlert(\"⚠️ CHECKSUM XOR FALLITO - Pacchetto corrotto\");\n    const deviceId = fullBuffer[HEADER_SIZE] || 0;\n    ackMsg = buildBinaryAck(deviceId, ACK_ERROR);\n    return [null, alarmMsg, ackMsg];\n}\n\n// ─── 3. Estrai metadati base ───────────────────────────────────────────\nconst type = fullBuffer[2];\nconst protocolVersion = fullBuffer[1];\nconst payloadLength = fullBuffer.readUInt16LE(3);\nconst payloadBuffer = fullBuffer.slice(HEADER_SIZE, fullBuffer.length - 1);\nconst deviceId = payloadBuffer[0] || 0;\nconst deviceName = getDeviceName(deviceId);\n\n// ─── 4. Verifica versione protocollo (warning) ─────────────────────────\nif (protocolVersion < PKT_VERSION) {\n    const warningMsg = `⚠️ ATTENZIONE: Device ${deviceName} (0x${deviceId.toString(16)}) usa protocollo OBSOLETO v${protocolVersion} (richiesta v${PKT_VERSION})`;\n    node.warn(warningMsg);\n    alarmMsg = sendTelegramAlert(warningMsg);\n    // Non blocchiamo, ma segnaliamo\n}\n\n// ─── 5. Gestione speciale: METEO multi-record (66 byte) ────────────────\nif (isMultiMeteoPacket(fullBuffer, payloadLength)) {\n    node.debug(`METEO multi-packet da ${deviceName} - inoltro a parser specializzato`);\n    msg.topic = \"meteo/multi\";\n    msg.rawBuffer = fullBuffer;  // preserva per parsing successivo\n    return [msg, alarmMsg, null];  // niente ACK qui, lo farà il parser multi\n}\n\n// ─── 6. Decodifica standard via PARSER_SPECS ───────────────────────────\nconst { error, decoded } = decodeBySpec(payloadBuffer, type);\n\nif (error) {\n    node.warn(`Tipo sconosciuto: 0x${type.toString(16)} da ${deviceName}`);\n    ackMsg = buildBinaryAck(deviceId, ACK_ERROR);\n    return [null, alarmMsg, ackMsg];\n}\n\n// ─── 7. Arricchisci output con comfort per DHT (se presente e non già espanso)\nlet finalPayload = decoded;\nif (type === TYPES?.DHT && decoded.comfort !== undefined && typeof decoded.comfort === 'number') {\n    finalPayload = {\n        ...decoded,\n        comfortFlags: decodeComfort(decoded.comfort),\n        comfortText: Object.entries(decodeComfort(decoded.comfort))\n            .filter(([,v]) => v).map(([k]) => k).join(', ') || 'ok'\n    };\n}\n\n// ─── 8. Determina topic di output ──────────────────────────────────────\nlet targetTopic = `sensors/${TYPE_NAME_MAP?.[type] || type}`;\n// Override per alcuni tipi\nif (type === TYPE_ACK) targetTopic = \"system/ack\";\nif (type === TYPES?.ANNOUNCE) targetTopic = \"system/announce\";\nif (type === TYPES?.COMMAND) targetTopic = \"commands/received\";\nif (type === TYPES?.TIME) targetTopic = \"system/time\";\nif (type === TYPES?.PID_CONFIG) targetTopic = \"sensors/caminetto/config\";\nif (type === TYPES?.TENDE_COMMAND) targetTopic = \"commands/tende\";\n\n// ─── 9. Costruisci ACK (solo per tipi che lo richiedono) ───────────────\nconst typesNeedingAck = [\n    TYPES?.METEO, TYPES?.TENDE, TYPES?.CAMINETTO, \n    TYPES?.PID_CONFIG, TYPES?.TENDE_COMMAND\n];\nconst needsAck = typesNeedingAck.includes(type);\nif (needsAck && type !== TYPE_ACK) {\n    ackMsg = buildBinaryAck(deviceId, ACK_END);\n}\n\n// ─── 10. Output finale ─────────────────────────────────────────────────\nmsg.payload = finalPayload;\nmsg.topic = targetTopic;\nmsg.packetMeta = {\n    typeKey: `TYPE_${type}`,\n    typeName: TYPE_NAME_MAP?.[type] || `0x${type.toString(16)}`,\n    typeNumber: type,\n    deviceId: deviceId,\n    deviceName: deviceName,\n    protocolVersion: protocolVersion,\n    rawLen: fullBuffer.length,\n    payloadLen: payloadLength,\n    xorValid: true\n};\n\nnode.status({\n    fill: \"green\",\n    shape: \"dot\",\n    text: `${msg.packetMeta.typeName} | ${deviceName}`\n});\n\nreturn [msg, alarmMsg, ackMsg];",
+        "outputs": 3,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 400,
+        "y": 80,
+        "wires": [
+            [],
+            [
+                "dfa6e007656442af"
+            ],
+            [
+                "a66e12c6e3cb8780"
+            ]
+        ]
+    },
+    {
+        "id": "dfa6e007656442af",
+        "type": "telegram sender",
+        "z": "cfb69e5ea50e09c1",
+        "name": "",
+        "bot": "9990e550.bd1d48",
+        "outputs": 1,
+        "x": 670,
+        "y": 80,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "a66e12c6e3cb8780",
+        "type": "mqtt out",
+        "z": "cfb69e5ea50e09c1",
+        "name": "ack",
+        "topic": "homie/espNowBridge/ack",
+        "qos": "0",
+        "retain": "false",
+        "respTopic": "",
+        "contentType": "",
+        "userProps": "",
+        "correl": "",
+        "expiry": "",
+        "broker": "2a66be145c853355",
+        "x": 630,
+        "y": 140,
+        "wires": []
+    },
+    {
+        "id": "2a66be145c853355",
+        "type": "mqtt-broker",
+        "name": "mosq1883",
+        "broker": "localhost",
+        "port": "1883",
+        "clientid": "",
+        "autoConnect": true,
+        "usetls": false,
+        "protocolVersion": "4",
+        "keepalive": "60",
+        "cleansession": true,
+        "birthTopic": "",
+        "birthQos": "0",
+        "birthPayload": "",
+        "birthMsg": {},
+        "closeTopic": "",
+        "closeQos": "0",
+        "closePayload": "",
+        "closeMsg": {},
+        "willTopic": "",
+        "willQos": "0",
+        "willPayload": "",
+        "willMsg": {},
+        "userProps": "",
+        "sessionExpiry": ""
+    },
+    {
+        "id": "9990e550.bd1d48",
+        "type": "telegram bot",
+        "botname": "CasaBot",
+        "usernames": "",
+        "chatids": "",
+        "baseapiurl": "",
+        "updatemode": "polling",
+        "pollinterval": "10000",
+        "usesocks": false,
+        "sockshost": "",
+        "socksport": "6667",
+        "socksusername": "anonymous",
+        "sockspassword": "",
+        "bothost": "",
+        "botpath": "",
+        "localbotport": "8443",
+        "publicbotport": "8443",
+        "privatekey": "",
+        "certificate": "",
+        "useselfsignedcertificate": false,
+        "sslterminated": false,
+        "verboselogging": false
+    },
+    {
+        "id": "047b1fb97d6a2b30",
+        "type": "global-config",
+        "env": [],
+        "modules": {
+            "node-red-contrib-telegrambot": "17.0.3"
+        }
+    }
+]

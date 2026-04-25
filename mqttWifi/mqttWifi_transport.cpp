@@ -18,6 +18,7 @@ extern "C" {
 
 namespace mqttWifi {
 extern PubSubClient client; // Definita in mqttWifi.cpp
+extern uint8_t m_deviceID; // Aggiunto per l'handshake
 
 // Buffer per catturare l'ultima risposta ricevuta (per gli ACK o ricezioni bidirezionali)
 static uint8_t g_lastRxBuf[250];
@@ -75,6 +76,10 @@ public:
     return false;
   }
 
+  bool sendBroadcast(const uint8_t *data, size_t len) override {
+    return false;
+  }
+
   int receive(uint8_t *buffer, size_t buflen) override { return 0; }
 
   void keepAlive() override {
@@ -107,7 +112,7 @@ public:
     wifi_set_channel(WIFI_CHANNEL_GATEWAY);
     wifi_promiscuous_enable(0);
 
-    Serial.printf("[INIT] Canale reale (ESP8266): %d | MAC: %s\n", wifi_get_channel(), WiFi.macAddress().c_str());
+    LOG_INFO("[INIT] Canale reale (ESP8266): %d | MAC: %s", wifi_get_channel(), WiFi.macAddress().c_str());
 
     if (esp_now_init() != 0) {
       LOG_ERROR("[TRANSPORT] ESP-NOW Init fallito\n");
@@ -130,7 +135,7 @@ public:
     esp_wifi_set_channel(WIFI_CHANNEL_GATEWAY, WIFI_SECOND_CHAN_NONE);
     esp_wifi_set_promiscuous(false);
     
-    Serial.printf("[INIT] Canale reale (ESP32): %d | MAC: %s\n", WiFi.channel(), WiFi.macAddress().c_str());
+    LOG_INFO("[INIT] Canale reale (ESP32): %d | MAC: %s", WiFi.channel(), WiFi.macAddress().c_str());
 
     if (esp_now_init() != ESP_OK) {
       LOG_ERROR("[TRANSPORT] ESP-NOW Init fallito (ESP32)\n");
@@ -177,13 +182,30 @@ public:
     }
 #endif
 
-    // --- MANSHAKE ATTIVO ---
-    uint8_t buf[10] = {0xAA, 0x01, 0x01, 0x05, 0x00, 0xFE, 0xCA, 0xFE, 0xBA, 0xBE};
-    uint8_t crc = 0;
-    for (uint8_t i = 0; i < 10; i++) {
-       if (i != 4) crc ^= buf[i];
-    }
-    buf[4] = crc;
+    // --- MANSHAKE ATTIVO (PacketProtocol v3) ---
+    // Header (5) + announceData (4) + XOR (1) = 10 bytes
+    uint8_t buf[10];
+    buf[0] = 0xAA; // Magic
+    buf[1] = 0x03; // Protocol Version v3
+    buf[2] = 0x01; // TYPE_ANNOUNCE
+    buf[3] = 0x04; // Payload Length LSB (announceData is 4 bytes)
+    buf[4] = 0x00; // Payload Length MSB
+
+    // Payload (deviceID + protoVer + fwVer)
+    buf[5] = mqttWifi::m_deviceID;
+    buf[6] = 0x03; // protoVer
+#ifdef versione
+    buf[7] = (uint8_t)(versione & 0xFF);
+    buf[8] = (uint8_t)(versione >> 8);
+#else
+    buf[7] = 0;
+    buf[8] = 0;
+#endif
+
+    // XOR Checksum
+    buf[9] = 0;
+    for (uint8_t i = 0; i < 9; i++) buf[9] ^= buf[i];
+
 
     mqttWifi::g_lastRxLen = 0;
     mqttWifi::g_gateway_mac_trovato = false; 
@@ -204,6 +226,7 @@ public:
     if (mqttWifi::g_gateway_mac_trovato) {
        LOG_INFO("[TRANSPORT] Gateway Trovato e Agganciato!\n");
        _peerAdded = true;
+       mqttWifi::g_lastRxLen = 0; // Clear the ANNOUNCE ACK so it doesn't trigger waitForAck prematurely
        return true;
     } else {
        LOG_ERROR("[TRANSPORT] Nessun Gateway ESP-NOW!\n");
@@ -239,6 +262,19 @@ public:
 #endif
   }
 
+  bool sendBroadcast(const uint8_t *data, size_t len) override {
+    if (!_initialized)
+      init();
+    uint8_t bcastMac[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+#ifdef ESP8266_BUILD
+    int res = esp_now_send(bcastMac, const_cast<uint8_t *>(data), len);
+    return (res == 0);
+#elif defined(ESP32_BUILD)
+    esp_err_t res = esp_now_send(bcastMac, data, len);
+    return (res == ESP_OK);
+#endif
+  }
+
   int receive(uint8_t *buffer, size_t buflen) override {
     if (mqttWifi::g_lastRxLen == 0)
       return 0;
@@ -267,6 +303,7 @@ public:
   void disconnect() override {}
   bool isConnected() override { return true; }
   bool send(const uint8_t *, size_t) override { return true; }
+  bool sendBroadcast(const uint8_t *, size_t) override { return true; }
   int receive(uint8_t *, size_t) override { return 0; }
   void keepAlive() override {}
 };

@@ -132,6 +132,10 @@ TouchEvent poll() {
     for (int i = 0; i < 3; i++)
       NEX_SERIAL.read();
     evt.isValid = true;
+    if (stato.currPage != evt.page) {
+      stato.currPage = evt.page; // ✅ Sincronizza stato.currPage
+      refreshCurrentPage();      // ✅ Ripopola i dati sulla nuova pagina
+    }
     LOG_VERBOSE("[NexTouch] P:%u ID:%u E:%u\n", evt.page, evt.component,
                 evt.event);
     break;
@@ -141,6 +145,10 @@ TouchEvent poll() {
     for (int i = 0; i < 3; i++)
       NEX_SERIAL.read();
     evt.isValid = true;
+    if (stato.currPage != evt.page) {
+      stato.currPage = evt.page; // ✅ Sincronizza stato.currPage
+      refreshCurrentPage();      // ✅ Ripopola i dati
+    }
     LOG_VERBOSE("[NexPage] %u\n", evt.page);
     break;
   }
@@ -170,7 +178,7 @@ TouchEvent poll() {
 
 // Ripopola il display Nextion dalla struttura stato.
 // Chiamare on-demand: al cambio di pagina o al ritorno su una pagina.
-void refreshCurrentPage() {
+void __attribute__((weak)) refreshCurrentPage() {
   // Questa funzione è ora vuota nella libreria condivisa per evitare conflitti
   // tra progetti diversi (es. Chrono vs Bagno) che hanno nomi di oggetti diversi.
   // La logica di aggiornamento deve essere gestita nel progetto specifico.
@@ -180,7 +188,7 @@ void aggiornaSliderTende() {
   if (stato.currPage != 1)
     return;
 
-  const char *barNames[] = {"ts_bar", "tl_bar", "ps_bar", "pl_bar", "pc_bar"};
+  const char *barNames[] = {"pl_bar", "tl_bar", "ps_bar", "ts_bar", "pc_bar"};
 
   for (int i = 0; i < 5; i++) {
     NexManager::sendFormatted("%s.val=%d", barNames[i], stato.pos[i]);
