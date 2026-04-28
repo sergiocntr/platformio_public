@@ -24,9 +24,17 @@ void registerPacketHandler(PacketHandler handler) { s_appHandler = handler; }
 void handleAckPacket(const uint8_t *payload, size_t len) {
   if (len >= 8 && payload[0] == 0xAA && payload[2] == 0x00) {
     uint8_t rcvId = payload[5];
-    if (rcvId == m_deviceID || rcvId == expectedAckDeviceID) {
+    LOG_VERBOSE("[ACK] Ricevuto da ID: 0x%02X (Atteso: 0x%02X o 0x%02X)\n", rcvId, m_deviceID, expectedAckDeviceID);
+    // Accetta l'ACK solo se è per noi o per il dispositivo che stiamo comandando
+    if (rcvId == m_deviceID || (expectedAckDeviceID != 0x00 && rcvId == expectedAckDeviceID)) {
       uint8_t status = payload[6];
       ackStatus = (AckState)status;
+      
+      // Ci consideriamo "accoppiati" solo se abbiamo ricevuto un ACK per un comando che stavamo ASPETTANDO noi
+      if (expectedAckDeviceID != 0x00 && rcvId == expectedAckDeviceID && rcvId != 0xFF) {
+        g_gateway_paired = true;
+        LOG_INFO("[PROTOCOL] Handshake riuscito con 0x%02X. Da ora solo Unicast.", rcvId);
+      }
 
       // --- AUTO-SWITCH TRANSPORT ---
       // Se il Gateway ci suggerisce di passare a ESP-NOW e siamo ancora in WiFi
@@ -43,13 +51,20 @@ void handleAckPacket(const uint8_t *payload, size_t len) {
 bool pp_dispatchPacket(const uint8_t *payload, unsigned int length) {
 
   // ── 1. Validazione frame ─────────────────────────────────────
+  if (length >= 3) {
+    LOG_VERBOSE("[DISPATCH] Raw Header: %02X %02X %02X (Len: %u)\n",
+                  payload[0], payload[1], payload[2], length);
+  }
+
   if (length < PACKET_MIN_SIZE || payload[0] != PACKET_MAGIC) {
-    LOG_WARN("[DISPATCH] Frame errato o magic missing");
     return false;
   }
 
   ParsedPacket pkt;
   int rc = pp_parsePacket(payload, length, &pkt);
+  if (rc != 0) {
+    LOG_ERROR("[DISPATCH] Parsing fallito con codice: %d\n", rc);
+  }
   if (rc != 0) {
     LOG_ERROR("[DISPATCH] Parse error %d (len=%u)", rc, length);
     return false;
@@ -102,7 +117,7 @@ bool pp_dispatchPacket(const uint8_t *payload, unsigned int length) {
     }
   }
 
-  // ── 5. Hook progetto ─────────────────────────────────────────
+  // ── 3. Dispatch ad applicazione (Progetti specifici) ─────────
   if (s_appHandler) {
     return s_appHandler(pkt);
   }
@@ -216,23 +231,25 @@ AckState sendBinaryCommandWithAck(uint8_t deviceID, bool on, uint8_t retries,
     if (res == ACK || res == END) {
       LOG_VERBOSE("[CMD-ACK] ✓ Confermato (deviceID=0x%02X, tentativo %d)",
                   deviceID, i + 1);
-      expectedAckDeviceID = 0xFF;
+      expectedAckDeviceID = 0x00;
       return res;
     }
     if (res == ERROR) {
       LOG_ERROR("[CMD-ACK] ✗ ERROR ricevuto (deviceID=0x%02X)", deviceID);
-      expectedAckDeviceID = 0xFF;
+      expectedAckDeviceID = 0x00;
       return ERROR;
     }
 
     LOG_WARN("[CMD-ACK] Tentativo %d/%d senza ACK, riprovo...", i + 1,
              retries + 1);
+    g_gateway_paired = false; // Fallback al prossimo tentativo (forza Broadcast)
     delay(200);
   }
 
   LOG_ERROR("[CMD-ACK] ✗ Nessun ACK dopo %d tentativi (deviceID=0x%02X)",
             retries + 1, deviceID);
-  expectedAckDeviceID = 0xFF;
+  g_gateway_paired = false; 
+  expectedAckDeviceID = 0x00;
   return NO_ACK;
 }
 

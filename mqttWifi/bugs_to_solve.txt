@@ -1,0 +1,13 @@
+✅ RISOLTI (Sessione 28-04-2026)
+-----------------------------
+1. [RISOLTO] sendBinaryCommandWithAck() è ora il cuore del sistema, con gestione stati e timeout.
+2. [RISOLTO] Fallback Broadcast: Implementata logica "Smart Fallback". Se l'Unicast non riceve ACK, il sistema resetta il pairing e riprova in Broadcast. Risolta la contraddizione degli ACK (ora sempre broadcast se non accoppiati).
+4. [RISOLTO] checkForUpdates(): Il trasporto ESP-NOW viene correttamente ripristinato dopo il controllo aggiornamenti.
+7. [RISOLTO] Watchdog lastTimeSynced: La logica di reset è stata resa più cauta per evitare di mascherare perdite di connessione prolungate.
+
+❌ ANCORA APERTI O DA VERIFICARE
+------------------------------
+3. gestisciConnessione(): La logica del "Social Sleep" dopo N tentativi falliti in WiFi è ancora semplificata rispetto alla v1.
+5. logMotivoSpegnimento(): Alcuni casi dell'enum (DHT_SETUP_FAILED) sono ancora nel default "SCONOSCIUTO".
+6. adessoDormo(): Manca ancora il comando esplicito di spegnimento Nextion nel cuore della libreria (attualmente gestito dai singoli PageHandlers).
+8. WiFiClient mywifi: Rimane rimossa (considerato refactoring corretto, non bug).

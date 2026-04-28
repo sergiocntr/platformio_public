@@ -18,7 +18,7 @@ MqttTransportType currentTransport = DEFAULT_MQTT_TRANSPORT;
 
 PubSubClient client(c_mqtt);
 volatile AckState ackStatus = NO_ACK;
-volatile uint8_t expectedAckDeviceID = 0xFF;
+volatile uint8_t expectedAckDeviceID = 0x00;
 
 void setAckStatus(AckState s) { ackStatus = s; }
 
@@ -70,20 +70,40 @@ bool publish(const char *topic, const char *message, bool retained) {
 bool publish(const char *topic, const uint8_t *payload, size_t length,
              bool retained) {
   if (getMqttTransport() == MqttTransportType::ESPNOW) {
-    if (mqttTransport) {
-      uint8_t type = (length >= 3) ? payload[2] : 0xFF;
+    // --- LOGICA DI ROUTING (Resilient Star v4) ---
+    // 1. I comandi e il tempo sono preferibilmente UNICAST (più affidabili)
+    uint8_t type = (length >= 3) ? payload[2] : 0xFF;
 
-      // Mantieni UNICAST per i pacchetti che richiedono conferma o sessione
-      if (type == TYPE_COMMAND || type == TYPE_TIME || type == TYPE_ACK) {
-        return mqttTransport->send(payload, length);
+    // 1. I comandi e il tempo (Discovery via Broadcast Pattern)
+    if (type == TYPE_COMMAND || type == TYPE_TIME) {
+      // Se non siamo "accoppiati" o il MAC non è noto, forziamo il BROADCAST (Handshake)
+      if (!g_gateway_mac_trovato || !g_gateway_paired) {
+        LOG_INFO("[PUBLISH] Handshake mode: invio BROADCAST (type: 0x%02X)",
+                 type);
+        return mqttTransport->sendBroadcast(payload, length);
       }
 
-      // Passa a BROADCAST per telemetria  announce e !!!ACK!!! (tutti devono avere la conferma del comando eseguito (Resilient Star v4))
+      // Se siamo accoppiati, usiamo l'Unicast efficiente
+      LOG_VERBOSE(
+          "[PUBLISH] Invio UNICAST a %02X:%02X:%02X:%02X:%02X:%02X\n",
+          g_real_gateway_mac[0], g_real_gateway_mac[1], g_real_gateway_mac[2],
+          g_real_gateway_mac[3], g_real_gateway_mac[4], g_real_gateway_mac[5]);
+
+      if (mqttTransport->send(payload, length))
+        return true;
+
+      // Se l'Unicast fallisce a livello radio, perdiamo l'accoppiamento e proviamo broadcast
+      LOG_WARN("[PUBLISH] Unicast fallito (radio), reset pairing e riprovo broadcast...");
+      g_gateway_paired = false; 
       return mqttTransport->sendBroadcast(payload, length);
     }
-    return false;
-  }
 
+    // 2. Gli ACK e la TELEMETRIA sono sempre BROADCAST (tutti devono sentire)
+    // Questo risolve la contraddizione segnalata nel file bugs_to_solve.txt
+    return mqttTransport->sendBroadcast(payload, length);
+  } // <--- CHIUDE IL RAMO ESPNOW
+
+  // RAMO MQTT/WiFi
   if (!client.connected())
     return false;
 
@@ -283,30 +303,35 @@ void loop() {
 
   // Watchdog Resilienza: controlla il heartbeat TIME dal gateway
   if (lastTimeSynced != 0 && (now - lastTimeSynced > SYNC_TIMEOUT)) {
-    LOG_WARN("[WATCHDOG] Heartbeat TIME perso! Fallback...");
-    // FIX PANIC: Resettiamo lastTimeSynced a 'now' per evitare lo spam di log ad ogni loop
-    // Se il problema persiste, il watchdog scatterà di nuovo tra SYNC_TIMEOUT ms.
-    lastTimeSynced = now; 
+    LOG_WARN("[WATCHDOG] Heartbeat TIME perso da %lu ms!",
+             (now - lastTimeSynced));
+
     if (getMqttTransport() == MqttTransportType::ESPNOW) {
       setMqttTransport(MqttTransportType::WIFI);
       setupWifi();
       if (connectWifi() && connectMqtt()) {
-        // Riconnessione riuscita: resetta il watchdog
         lastTimeSynced = now;
         LOG_INFO("[WATCHDOG] Fallback a WiFi riuscito. Watchdog resettato.");
       } else {
-        // Riconnessione fallita: NON resettare, lascia il watchdog attivo
-        LOG_ERROR(
-            "[WATCHDOG] Fallback a WiFi fallito. Watchdog rimane attivo.");
+        // Riconnessione fallita: evitiamo lo spam ma non resettiamo a 2 minuti.
+        // Lo facciamo scattare di nuovo tra 30 secondi.
+        lastTimeSynced = now - SYNC_TIMEOUT + 30000;
+        LOG_ERROR("[WATCHDOG] Fallback fallito. Riprovo tra 30s.");
       }
+    } else {
+      // Già in WiFi ma niente tempo? Siamo offline.
+      lastTimeSynced = now - SYNC_TIMEOUT + 30000;
+      LOG_ERROR("[WATCHDOG] Persa sincronizzazione in WiFi. Riprovo tra 30s.");
     }
   }
 
   if (getMqttTransport() == MqttTransportType::ESPNOW) {
     uint8_t rxBuf[250];
-    int rxLen = receive(rxBuf, sizeof(rxBuf));
-    if (rxLen > 0)
+    int rxLen;
+    // Svuota TUTTA la FIFO ad ogni ciclo per evitare overrun in caso di burst
+    while ((rxLen = receive(rxBuf, sizeof(rxBuf))) > 0) {
       pp_dispatchPacket(rxBuf, (unsigned int)rxLen);
+    }
   } else {
     client.loop();
   }
@@ -344,15 +369,15 @@ void checkForUpdates() {
     setMqttTransport(MqttTransportType::ESPNOW);
 }
 MotivoSpegnimento setupCompleto(IPAddress ip, const char *mqtt_id,
-                                 const char *progetto_topics[],
-                                 uint8_t deviceID) {
+                                const char *progetto_topics[],
+                                uint8_t deviceID) {
   m_ip = ip;
   m_deviceID = deviceID;
   m_topics = progetto_topics;
   snprintf(m_mqtt_id, sizeof(m_mqtt_id), "%s", mqtt_id);
 
   // --- SCELTA TRASPORTO (Resilient Star v4) ---
-  // Di default partiamo SEMPRE con ESP-NOW. È veloce, leggero e non richiede 
+  // Di default partiamo SEMPRE con ESP-NOW. È veloce, leggero e non richiede
   // connessione al router. Se il gateway non risponde, passeremo a WiFi.
 #ifdef ESP32_MQTT
   // Il Gateway (Bridge) parla ovviamente MQTT/WiFi direttamente dal broker

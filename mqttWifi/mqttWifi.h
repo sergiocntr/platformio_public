@@ -39,8 +39,9 @@ enum AckState {
 };
 
 extern volatile AckState ackStatus;
-
-// ========== MONITORAGGIO RESILIENZA ==========
+extern bool g_gateway_mac_trovato; // Stato di aggancio del gateway
+extern bool g_gateway_paired;      // Handshake completato con successo
+extern uint8_t g_real_gateway_mac[6]; // MAC address reale del gateway
 extern uint32_t lastTimeSynced;    // Ultimo timestamp pacchetto TIME ricevuto
 extern const uint32_t SYNC_TIMEOUT; // Timeout per switch (es. 5 min)
 
@@ -122,7 +123,7 @@ bool pp_dispatchPacket(const uint8_t *payload, unsigned int length);
 void sendBinaryAck(uint8_t deviceID, uint8_t command, bool on);
 AckState sendBinaryCommandWithAck(uint8_t deviceID, bool on,
                                   uint8_t retries = 2,
-                                  uint32_t timeoutMs = 300);
+                                  uint32_t timeoutMs = 1000);
 
 // ========== RICEZIONE TRASPORTO (PER ACK/RISPOSTE) ==========
 int receive(uint8_t *buffer, size_t buflen);

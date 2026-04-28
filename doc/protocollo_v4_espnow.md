@@ -1,37 +1,34 @@
-# Protocollo ESP-NOW v4.0 (Enhanced Resilient Star)
-*Data di rilascio: 26 Aprile 2026*
+# Protocollo Resilient Star v4.6 (Handshake Intelligente)
+*Ultimo aggiornamento: 28 Aprile 2026 - Il giorno della Resilienza Unicast*
 
-Questo documento sancisce l'evoluzione del protocollo radio verso una gestione nativa del **Broadcast** e l'integrazione trasparente di sensori MQTT e Radio.
+Questo documento descrive la logica di comunicazione definitiva per la rete radio Resilient Star.
 
-## 1. Novità Principali (v4.0 vs v3.x)
+## 1. Handshake Intelligente (Discovery via Broadcast)
+Per garantire la stabilità dell'ESP8266 ed evitare collisioni, i nodi seguono un pattern di accoppiamento dinamico:
 
-### I. Broadcast Nativo (Radio-to-Radio)
-Il Gateway agisce ora come un **Ripetitore Trasparente**. Ogni pacchetto ricevuto  via radio (NB: non deve essere TYPE_COMMAND o TYPE_TIME) viene immediatamente rispedito in broadcast (`FF:FF:FF:FF:FF:FF`). (perche' non lo trasmette gia' in broadcast il nodo?)
-*   **Vantaggio**: Tutti i display (Chrono) ricevono gli ACK di conferma della esecuzione dei TYPE_COMMAND (che vengono trasmessi sempre un broadcast es. dai nodi Caldaia) istantaneamente, permettendo un aggiornamento globale delle icone senza polling.
+1.  **Boot (Discovery)**: Il nodo parte con `g_gateway_paired = false`. 
+2.  **Primo Invio**: Tutti i comandi (`TYPE_COMMAND`) o annunci (`ANNOUNCE`) vengono inviati in **Broadcast** (`FF:FF:FF:FF:FF:FF`).
+3.  **Accoppiamento**: Se il Gateway risponde con un `TYPE_ACK` che contiene il `deviceID` del nodo o del comando, il nodo salva il MAC del Gateway e imposta `g_gateway_paired = true`.
+4.  **Operatività Unicast**: Da questo momento, le comunicazioni verso il Gateway avvengono in **Unicast** (più veloce ed efficiente).
 
-### II. Heartbeat Unicast (Ping Ora)
-Il pacchetto `TYPE_TIME` (0x08) continua a viaggiare in **Unicast Unroll**. 
-*   **Scopo**: Fungere da "Keep-Alive". Se un nodo non risponde all'ora per 3 cicli, viene marcato come *Offline* dal Gateway. Questo evita di inquinare la radio con broadcast di dati se i nodi sono spenti.
+## 2. Smart Fallback (Auto-Guarigione)
+Se una comunicazione Unicast fallisce (non riceve un ACK a livello di protocollo entro il timeout), il sistema:
+*   Reset delle impostazioni di pairing (`g_gateway_paired = false`).
+*   Esegue immediatamente un **Retry in Broadcast**.
+*   Questo garantisce che il comando arrivi sempre a destinazione, anche se il Gateway ha cambiato canale o ha resettato la sua tabella dei peer.
 
-### III. Bridge Selettivo MQTT (RPi3 Support)
-Il Gateway si iscrive ora al topic `espNowBridge/buffer`. Se riceve un pacchetto da un dispositivo puramente MQTT (es. RPi3 via WiFi), lo rilancia via Radio.
-*   **Loop Protection**: Il Gateway inoltra alla radio solo i pacchetti i cui `deviceID` non sono marcati come `isEspNow`, evitando ridondanze infinite.
+## 3. La "Regola d'Oro" dell'Inizializzazione
+Sull'ESP8266, per ricevere i broadcast senza perdite, l'ordine è tassativo:
+1.  `WiFi.mode(WIFI_STA)` + `WiFi.disconnect()`
+2.  `esp_now_init()`
+3.  `esp_now_set_self_role(ESP_NOW_ROLE_COMBO)`
+4.  `esp_now_register_recv_cb(onInternalEspNowRx)`
+5.  **Solo ora** aggiungere i peer (Broadcast e Gateway).
 
-### IV. Segnale di Errore "Certo" (255.0)
-È obbligatorio per i nodi trasmettere il valore **255.0** in caso di guasto ai sensori (DS18B20/DHT).
-*   **Stale Data Prevention**: Mai più valori "congelati" sul display se un sensore muore.
+## 4. Watchdog e Heartbeat
+*   **TYPE_TIME (0x08)**: È il battito cardiaco della rete.
+*   **Timeout**: 2 minuti (120s). Se scadono, il nodo commuta in **WiFi + MQTT**.
+*   **MQTT Down**: Se il Gateway non sente MQTT, emette un "fake heartbeat" (33:33) per mantenere i nodi in radio ed evitare passaggi inutili al WiFi.
 
-## 2. Implementazione della "Regola d'Oro"
-Per la stabilità dell'ESP8266 sul broadcast, l'ordine di avvio non è negoziabile:
-1.  `esp_now_init()`
-2.  `esp_now_register_recv_cb()`
-3.  `wifi_set_channel(12)`
-4.  `esp_now_add_peer(broadcastAddress)`
-
-## 3. Comandi e ACK
-*   **Comandi**: Sempre inviati dal nodo verso il Gateway (Unicast).
-*   **ACK**: Prodotti dal nodo destinatario e rilanciati dal Gateway in Broadcast.
-*   **Display**: I display devono aggiornare le icone su RICEZIONE ACK, indipendentemente da chi ha originato il comando.
-
----
-*Aggiornato con orgoglio il 26 Aprile 2026 - Il giorno del Vero Broadcast.*
+## 5. Standard Sensori
+*   **Valore 255.0**: Segnala sensore guasto o scollegato. Obbligatorio per tutti i nodi.

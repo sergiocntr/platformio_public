@@ -21,7 +21,7 @@ extern PubSubClient client; // Definita in mqttWifi.cpp
 extern uint8_t m_deviceID;  // Aggiunto per l'handshake
 
 // FIFO per il rx di ESP-NOW (risolve race condition e buffer overrun)
-static const size_t RX_FIFO_SLOTS = 5;
+static const size_t RX_FIFO_SLOTS = 10;
 struct RxFifoSlot {
   uint8_t data[250];
   size_t len;
@@ -32,9 +32,14 @@ static volatile size_t g_rxFifoTail = 0;      // Letto dal loop
 static volatile uint32_t g_rxFifoOverrun = 0; // Contatore overrun
 
 bool g_gateway_mac_trovato = false;
+bool g_gateway_paired = false; // Diventa true dopo il primo ACK ricevuto
 uint8_t g_real_gateway_mac[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
 void onInternalEspNowRx(const uint8_t *mac, const uint8_t *data, size_t len) {
+  // LOG_VERBOSE("\n[ESP-NOW RX] From: %02X:%02X:%02X:%02X:%02X:%02X, Len:
+  // %d\n",
+  //               mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], (int)len);
+
   if (len > 0 && len <= sizeof(RxFifoSlot::data)) {
     // Calcola il prossimo slot nella FIFO
     size_t nextHead = (g_rxFifoHead + 1) % RX_FIFO_SLOTS;
@@ -42,34 +47,43 @@ void onInternalEspNowRx(const uint8_t *mac, const uint8_t *data, size_t len) {
     // Controlla overrun (la FIFO è piena)
     if (nextHead == g_rxFifoTail) {
       g_rxFifoOverrun++;
-      LOG_WARN("[RX-FIFO] Overrun! Pacchetto perso.");
+      // LOG_WARN("[RX-FIFO] Overrun! Pacchetto perso.");
       return;
     }
 
-    // Scrivi nel slot corrente (protetto perché scrivere un'intera struct è
-    // atomico)
+    // Scrivi nel slot corrente
     RxFifoSlot &slot = g_rxFifo[g_rxFifoHead];
     slot.len = len;
     memcpy(slot.data, data, len);
 
-    // Avanza il head (con barrier per sincronizzazione)
+    // Avanza il head
     g_rxFifoHead = nextHead;
 
     if (!g_gateway_mac_trovato) {
-      g_gateway_mac_trovato = true;
-      memcpy(g_real_gateway_mac, mac, 6);
+      // Solo se il pacchetto è un TYPE_ANNOUNCE (0x01) o TYPE_TIME (0x08)
+      // accettiamo il MAC come gateway. Altrimenti un broadcast a caso
+      // di un altro nodo potrebbe "rubare" il ruolo di gateway.
+      uint8_t type = (len >= 3) ? data[2] : 0xFF;
+      if (type == 0x01 || type == 0x08 ||
+          type == 0x00) { // Announce, Time o ACK
+        g_gateway_mac_trovato = true;
+        memcpy(g_real_gateway_mac, mac, 6);
+        LOG_INFO("[TRANSPORT] Gateway trovato dal traffico: "
+                 "%02X:%02X:%02X:%02X:%02X:%02X",
+                 mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 
 #ifdef ESP8266_BUILD
-      esp_now_del_peer(g_real_gateway_mac); // Per sicurezza
-      esp_now_add_peer(g_real_gateway_mac, ESP_NOW_ROLE_COMBO,
-                       WIFI_CHANNEL_GATEWAY, NULL, 0);
+        esp_now_del_peer(g_real_gateway_mac);
+        esp_now_add_peer(g_real_gateway_mac, ESP_NOW_ROLE_COMBO,
+                         WIFI_CHANNEL_GATEWAY, NULL, 0);
 #elif defined(ESP32_BUILD)
-      esp_now_peer_info_t peerInfo = {};
-      peerInfo.channel = WIFI_CHANNEL_GATEWAY;
-      peerInfo.encrypt = false;
-      memcpy(peerInfo.peer_addr, g_real_gateway_mac, 6);
-      esp_now_add_peer(&peerInfo);
+        esp_now_peer_info_t peerInfo = {};
+        peerInfo.channel = WIFI_CHANNEL_GATEWAY;
+        peerInfo.encrypt = false;
+        memcpy(peerInfo.peer_addr, g_real_gateway_mac, 6);
+        esp_now_add_peer(&peerInfo);
 #endif
+      }
     }
   }
 }
@@ -132,25 +146,24 @@ public:
     WiFi.disconnect();
 
 #ifdef ESP8266_BUILD
-    // 2. Imposta il canale PRIMA di esp_now_init() (l'init aggancia il canale
-    // corrente)
-    wifi_set_channel(WIFI_CHANNEL_GATEWAY);
-    delay(100); // Permetti al radio di stabilizzarsi
-
-    // 3. Init ESP-NOW
+    // 1. Init ESP-NOW (Regola d'Oro v4.0)
     if (esp_now_init() != 0) {
       LOG_ERROR("[TRANSPORT] ESP-NOW Init fallito\n");
       return false;
     }
 
-    // 4. Imposta ruolo e callbacks
+    // 2. Imposta ruolo e callbacks PRIMA di cambiare canale
     esp_now_set_self_role(ESP_NOW_ROLE_COMBO);
-
     esp_now_register_recv_cb([](uint8_t *mac, uint8_t *data, uint8_t len) {
       mqttWifi::onInternalEspNowRx(mac, data, len);
     });
+
+    // 3. Imposta il canale DOPO l'init (Regola d'Oro v4.0)
+    wifi_set_channel(WIFI_CHANNEL_GATEWAY);
+    delay(100); // Permetti al radio di stabilizzarsi
+
     esp_now_register_send_cb([](uint8_t *mac, uint8_t status){
-      // status == 0: successo
+        // status == 0: successo
                              });
 
     LOG_INFO("[INIT] Canale reale (ESP8266): %d | MAC: %s", wifi_get_channel(),
@@ -172,6 +185,7 @@ public:
         [](const uint8_t *mac, const uint8_t *data, int len) {
           mqttWifi::onInternalEspNowRx(mac, data, len);
         });
+
     esp_now_register_send_cb(
         [](const uint8_t *mac, esp_now_send_status_t status) {
           // status confirmation
@@ -250,7 +264,8 @@ public:
 
     LOG_INFO("[TRANSPORT] Cerco il Gateway ESP-NOW (Announce)...\n");
     const uint32_t ANNOUNCE_INTERVAL_MS = 300;
-    const uint32_t ANNOUNCE_TIMEOUT_MS = 900; // 3 tentavi * 300ms senza bloccaggio
+    const uint32_t ANNOUNCE_TIMEOUT_MS =
+        900; // 3 tentavi * 300ms senza bloccaggio
     uint32_t announceStart = millis();
     uint32_t lastAnnounceTime = 0;
     int announceCount = 0;
@@ -350,16 +365,23 @@ public:
 
   int receive(uint8_t *buffer, size_t buflen) override {
     // Leggi dalla FIFO (thread-safe per ESP con core unico)
-    if (mqttWifi::g_rxFifoTail == mqttWifi::g_rxFifoHead)
+    if (mqttWifi::g_rxFifoTail == mqttWifi::g_rxFifoHead) {
+      // LOG_VERBOSE("\n[RX-FIFO] FIFO vuota (tail: %d, head: %d)\n",
+      //               mqttWifi::g_rxFifoTail, mqttWifi::g_rxFifoHead);
       return 0; // FIFO vuota
+    }
 
     // Leggi il primo elemento della FIFO
-    const mqttWifi::RxFifoSlot &slot = mqttWifi::g_rxFifo[mqttWifi::g_rxFifoTail];
+    const mqttWifi::RxFifoSlot &slot =
+        mqttWifi::g_rxFifo[mqttWifi::g_rxFifoTail];
     size_t toCopy = (slot.len < buflen) ? slot.len : buflen;
     memcpy(buffer, slot.data, toCopy);
 
     // Avanza il tail
-    mqttWifi::g_rxFifoTail = (mqttWifi::g_rxFifoTail + 1) % mqttWifi::RX_FIFO_SLOTS;
+    mqttWifi::g_rxFifoTail =
+        (mqttWifi::g_rxFifoTail + 1) % mqttWifi::RX_FIFO_SLOTS;
+    LOG_VERBOSE("[RX-FIFO] Pacchetto letto dalla FIFO (tail: %d, head: %d)\n",
+                  mqttWifi::g_rxFifoTail, mqttWifi::g_rxFifoHead);
     return (int)toCopy;
   }
 

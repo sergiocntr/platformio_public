@@ -7,53 +7,20 @@ Benvenuti nella documentazione dell'architettura Enhanced Resilient Star, un eco
 3. L' ambiente platformio e' `/home/sergioc/.platformio/penv/bin/pio`
 
 
-* 🚀 Visione Architetturale v4.5  
-L'ecosistema si è evoluto da un semplice bridge verso il modello di Transparent Repeater (Ripetitore Trasparente)
-. In questa versione, il Gateway non funge solo da ponte verso MQTT, ma rilancia istantaneamente ogni pacchetto radio ricevuto in Broadcast nativo, permettendo a tutti i nodi della rete (come i Chrono) di aggiornarsi in tempo reale senza attendere il broker
-.
-* 🛡️ Strategia di Resilienza a Tre Livelli
-Il sistema opera secondo una gerarchia di trasporto dinamica
-:
-Tier 1: ESP-NOW (Nativo): Trasporto primario a bassissimo consumo e latenza verso il Gateway
-.
-Tier 2: WiFi + MQTT (Failover): Attivato automaticamente se il Gateway radio non risponde
-.
-Tier 3: Broadcast Sociale: Modalità di emergenza P2P in caso di isolamento totale (No Gateway + No WiFi)
-.
+* 🚀 Visione Architetturale v4.6 (Stable)
+L'ecosistema opera come un **Transparent Repeater**. Il Gateway non solo bridgea verso MQTT, ma rilancia istantaneamente ogni pacchetto radio in Broadcast, permettendo aggiornamenti UI globali (Chrono) in tempo reale.
+
+* 🛡️ Strategia di Resilienza v4.6
+Tier 1: ESP-NOW (Nativo) con **Smart Handshake**. Discovery in Broadcast -> Pairing Unicast -> Auto-fallback Broadcast in caso di errore.
+Tier 2: WiFi + MQTT (Failover). Attivato automaticamente se il Watchdog Heartbeat (2 min) scade.
+Tier 3: Broadcast Sociale. Modalità di emergenza P2P in isolamento totale.
 
 --------------------------------------------------------------------------------
-* 🛠️ Componenti Chiave della v4.5
-1. Watchdog Heartbeat Attivo
-- Ogni nodo integra un Watchdog di Resilienza basato sulla ricezione dei pacchetti TYPE_TIME (0x08)
-.
-- Il pacchetto TYPE_TIME (0x08) viene effettuata in prima instanza da MQTT
-.
-Il gateway percepisce il pacchetto e capisce che MQTT e' operativo.
-.
-I nodi ESP8266 partono preferibilmente in ESP Now e ricevono il pacchetto TYPE_TIME (0x08) dal gateway.
-.
-Se il gateway non e' connesso a MQTT, emette autonomamente TYPE_TIME con ora 33:33 ogni 60s (sentinel visivo).
-Trigger: Se non viene ricevuto l'heartbeat temporale per più di 2 minuti (120.000 ms) — valore reale in mqttWifi_protocol.cpp: SYNC_TIMEOUT
-.
-Azione: Il nodo commuta autonomamente il trasporto su WiFi + MQTT per cercare di ristabilire il contatto con il server
-.
-2. Social Sleep ed Emergenza
-In caso di fallimento di tutti i trasporti, i nodi entrano in Social Sleep
-:
-Sincronizzazione P2P: I nodi inviano i propri dati critici (es. temperature) in broadcast radio verso gli altri nodi alimentati
-.
-Soft Sleep: Il display Nextion viene spento (thup=1) per risparmiare energia e segnalare visivamente lo stato di emergenza
-.
-Radio Polling: La radio rimane attiva in finestre ridotte per intercettare il ritorno del Gateway
-.
-3. Gateway Recovery (Il "Richiamo")
-Al riavvio o ripristino del Gateway, viene inviato il comando AC_SWITCH_TO_ESPNOW (0x05) via MQTT
-. I nodi in modalità WiFi ricevono questo comando, chiudono la connessione AP e tornano istantaneamente in modalità radio efficiente
-.
-4. Gestione Errori "Dato Certo"
-È obbligatorio per tutti i nodi trasmettere il valore 255.0 in caso di guasto fisico ai sensori (DS18B20 o DHT)
-. Questo evita il fenomeno dei "dati congelati" (stale data) sulle interfacce utente
-.
+* 🛠️ Novità Tecniche
+1. **Handshake Intelligente**: I nodi si accoppiano al Gateway solo dopo aver ricevuto un ACK valido. Questo elimina le interferenze da altri dispositivi.
+2. **Smart Fallback**: Se un comando Unicast fallisce, il sistema riprova automaticamente in Broadcast resettando il pairing.
+3. **Watchdog Heartbeat (33:33)**: Se il broker MQTT è giù, il Gateway emette un'ora "sentinel" (33:33) per mantenere i nodi in radio.
+4. **Standard 255.0**: Valore obbligatorio per segnalare sensori guasti.
 ### SCENARI
 * SCENARIO A: MQTT DOWN, Gateway UP
   - Nodi ESP-NOW: dati non arrivano al cloud (MQTT bridge rotto)
