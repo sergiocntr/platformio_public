@@ -24,6 +24,10 @@
 namespace mqttWifi {
 extern PubSubClient client;
 
+// ========== TOPIC DI SISTEMA (DEFAULT) ==========
+// Questi topic sono sempre sottoscritti per garantire la resilienza
+extern const char* CORE_TOPICS[];
+
 // ========== STATI DI CONFERMA (ACK) ==========
 enum AckState {
   NO_ACK = 0,
@@ -35,6 +39,10 @@ enum AckState {
 };
 
 extern volatile AckState ackStatus;
+
+// ========== MONITORAGGIO RESILIENZA ==========
+extern uint32_t lastTimeSynced;    // Ultimo timestamp pacchetto TIME ricevuto
+extern const uint32_t SYNC_TIMEOUT; // Timeout per switch (es. 5 min)
 
 // trasporto selezionabile
 void setMqttTransport(MqttTransportType t);
@@ -63,7 +71,8 @@ bool connectWifi();
 bool connectMqtt();
 
 // ========== SOTTOSCRIZIONE TOPIC ==========
-bool sottoscriviTopics(const char *topics[]);
+// Sottoscrive i core topics + quelli opzionali del progetto
+bool sottoscriviTopics(const char *progetto_topics[] = nullptr);
 
 // ========== AGGIORNAMENTO FIRMWARE ==========
 void checkForUpdates();
@@ -88,7 +97,7 @@ MotivoSpegnimento gestisciConnessione();
 
 /** 
  * Loop centralizzato: gestisce client.loop() (WiFi) o polling ESP-NOW.
- * Sostituisce la chiamata diretta a client.loop() nei progetti.
+ * Gestisce anche il watchdog della resilienza.
  */
 void loop();
 
@@ -104,44 +113,23 @@ void sendAnnounce();
 void handleAckPacket(const uint8_t *payload, size_t len);
 
 // ========== DISPATCHER CENTRALIZZATO PacketProtocol ==========
-/**
- * Hook applicativo registrato dal progetto locale.
- * Viene chiamato SOLO per i pacchetti non gestiti dalla libreria
- * (comandi broadcast come SLEEP/UPDATE/RESET sono già intercettati).
- * Restituisce true se il pacchetto è stato gestito, false altrimenti.
- */
 typedef bool (*PacketHandler)(const ParsedPacket &pkt);
-
-/** Registra l'hook del progetto. Da chiamare una volta in setup(). */
 void registerPacketHandler(PacketHandler handler);
-
-/**
- * Dispatcher centralizzato — da chiamare nella callback MQTT del progetto
- * al posto di tutta la logica di validazione e switch/case.
- * Gestisce autonomamente: magic check, parse, version check,
- * CMD_SYS_SLEEP, CMD_SYS_UPDATE, CMD_SYS_RESET, TYPE_ACK.
- * Passa il controllo all'hook del progetto per tutto il resto.
- * Restituisce true se il pacchetto è stato gestito.
- */
 bool pp_dispatchPacket(const uint8_t *payload, unsigned int length);
 
 // ========== COMANDI BINARI (PacketProtocol v2) ==========
-/**
- * Invia un comando binario TYPE_COMMAND standard (ID dispositivo + Stato
- * ON/OFF). Utilizzato sia per inviare comandi (dal Chrono) che come ACK di
- * conferma (dalla Caldaia).
- */
-void sendBinaryCommand(uint8_t deviceID, bool on);// Deprecato
-
+//void sendBinaryCommand(uint8_t deviceID, bool on);// Deprecato
 void sendBinaryAck(uint8_t deviceID, uint8_t command, bool on);
 AckState sendBinaryCommandWithAck(uint8_t deviceID, bool on,
-                                  uint8_t retries,
-                                  uint32_t timeoutMs);
+                                  uint8_t retries = 2,
+                                  uint32_t timeoutMs = 300);
+
 // ========== RICEZIONE TRASPORTO (PER ACK/RISPOSTE) ==========
 int receive(uint8_t *buffer, size_t buflen);
 
 // ========== SETUP COMPLETO (DA CHIAMARE IN setup()) ==========
+// topics può essere nullptr se il progetto non ha topic extra oltre ai core
 MotivoSpegnimento setupCompleto(IPAddress ip, const char *mqtt_id,
-                                const char *topics[], uint8_t deviceID = 0xFF);
+                                const char *topics[] = nullptr, uint8_t deviceID = 0xFF);
 
 } // namespace mqttWifi

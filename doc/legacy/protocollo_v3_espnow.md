@@ -1,3 +1,5 @@
+
+
 # Protocollo ESP-NOW v3.0 (Resilient Star)
 Specifiche tecniche e "Must-Have" per i nodi foglia (Chrono, Caldaia, Sensori).
 
@@ -10,13 +12,14 @@ La rete opera in modalità **Resilient Star**:
 
 ## 2. Le 5 Regole d'Oro del Setup (Firmware)
 
-### I. Ordine di inizializzazione (Cruciale)
-Il callback dei pacchetti **deve** essere registrato prima di avviare la connessione. Se invertiti, il nodo riceverà la risposta dal Gateway ma non saprà come processarla.
-```cpp
-// CORRETTO
-mqttWifi::setCallback(); 
-mqttWifi::setupCompleto(ip, id, topics, DEV_ID);
-```
+### I. Ordine di inizializzazione (LA REGOLA D'ORO)
+Per abilitare il broadcast e la stabilità radio, l'ordine **deve** essere:
+1. `esp_now_init()`
+2. Registrazione Callbacks (`esp_now_register_recv_cb`)
+3. Impostazione Canale (`wifi_set_channel` o `esp_wifi_set_channel`)
+4. Registrazione Peer (`FF:FF:FF:FF:FF:FF`)
+
+Se il canale viene toccato prima dell'init (vecchia scuola), il broadcast fallirà silenziosamente.
 
 ### II. Handshake di Scoperta (Manshake)
 I nodi non conoscono il MAC address "reale" del Gateway all'avvio:
@@ -79,7 +82,7 @@ Questo meccanismo garantisce che la rete converga verso ESP-NOW il più veloceme
    # Esempio per Gateway ESP32:
    /home/sergioc/.platformio/penv/bin/pio run --environment lolin32_lite
    ```
-2. **Diagnosi delle Cadute su MQTT ("Fallback Errati")**: Se un qualsiasi nodo (es. Caldaia, Bagno, EneMain) lancia via MQTT il log `"Nodo connected | FW: xxx | PROTO: v3"`, significa inequivocabilmente che non ha mai ricevuto l'ACK `ESP-NOW` dal Gateway. Verificate quindi che il firmware Gateway stia usando `esp_now_send(mac, ...)` e non l'indirizzo broadcast per l'handshake.
+3. **Gestione Errori Sensore (Dato Certo)**: Quando un sensore DS18B20 o DHT fallisce, il nodo trasmette **255.0**. Questo permette ai display di mostrare "Error" o "---" invece di mantenere l'ultima lettura valida.
 
 ---
 *Ultimo aggiornamento: 24/04/2026 - Rimozione handshake 0xFE, Fix ACK Unicast per ESP-NOW, Istruzioni sviluppo pio.*

@@ -1,0 +1,8 @@
+.
+├── deviceIDs -> /media/progetti_ext/PROJECT/priv/deviceIDs
+├── list_files.txt
+├── myIP -> /media/progetti_ext/PROJECT/priv/myIP
+├── password -> /media/progetti_ext/PROJECT/priv/password
+└── topic -> /media/progetti_ext/PROJECT/priv/topic
+
+5 directories, 1 file

@@ -1,0 +1,69 @@
+27/04/2026, 07:28:47node: debug 3
+msg.payload : string[59]
+"[nodeMar] [WRN] [GESTIONE] MQTT disconnesso, tentativo 1/3↵"
+27/04/2026, 07:28:47node: debug 9
+homie/log : msg.payload : string[38]
+"nodeMar connected | FW: v4 | PROTO: v4"
+27/04/2026, 07:28:47node: buffer_recived
+homie/espNowBridge/buffer : msg.payload : buffer[10]
+[ 170, 4, 1, 4, 0, 208, 4, 4, 0, 123 ]
+27/04/2026, 07:28:47node: debug 6
+homie/espNowBridge/buffer : msg.payload : Object
+{ deviceId: 208, protoVersion: 4, fwVersion: 4 }
+27/04/2026, 07:28:48node: debug 17
+homie/espNowBridge/buffer : msg.packetMeta : Object
+{ typeKey: "TYPE_1", typeName: "ANNOUNCE", deviceId: 208, deviceName: "DEV_MARINER_BME280", rawLen: 10 … }
+27/04/2026, 07:28:48node: buffer_recived
+homie/espNowBridge/buffer : msg.payload : buffer[22]
+[ 170, 4, 3, 16, 0, 208, 0, 50, 71, 34 … ]
+27/04/2026, 07:28:48node: 1. Unified Meteo Decoder
+function : (warn)
+"📦 [SINGLE] Record meteo singolo ricevuto, invio al cloud..."
+27/04/2026, 07:28:48node: debug 6
+homie/espNowBridge/buffer : msg.payload : Object
+{ deviceId: 208, humidity: 100, temperature: 18.55, pressure: 1003.38, battery: 4452 … }
+27/04/2026, 07:28:48node: debug 17
+homie/espNowBridge/buffer : msg.packetMeta : Object
+{ typeKey: "TYPE_3", typeName: "METEO", deviceId: 208, deviceName: "DEV_MARINER_BME280", rawLen: 22 … }
+27/04/2026, 07:28:48node: debug 1
+homie/espNowBridge/buffer : msg.payload : string[86]
+"{"status":"success","type":"METEO","deviceId":208,"received_at":"2026-04-27 07:2..."
+27/04/2026, 07:28:48node: 3. HTTP Ack/Backup Handler
+function : (warn)
+"✅ Cloud Salvato OK! Emetto ACK_END."
+27/04/2026, 07:30:02node: debug 3
+msg.payload : string[49]
+"[RPi-Broker] [MQTT] Invio Announce (ID=0x20, v4)↵"
+27/04/2026, 07:30:02node: debug 3
+msg.payload : string[62]
+"[RPi-Broker] [MQTT BIN] Temp=19.3 C, Hum=46.3 %, Comfort=0x01↵"
+27/04/2026, 07:30:02node: buffer_recived
+homie/espNowBridge/buffer : msg.payload : buffer[10]
+[ 170, 4, 1, 4, 0, 32, 4, 100, 0, 235 ]
+27/04/2026, 07:30:02node: buffer_recived
+homie/espNowBridge/buffer : msg.payload : buffer[12]
+[ 170, 4, 4, 6, 0, 32, 38, 23, 166, 34 … ]
+27/04/2026, 07:30:02node: debug 6
+homie/espNowBridge/buffer : msg.payload : Object
+{ deviceId: 32, protoVersion: 4, fwVersion: 100 }
+27/04/2026, 07:30:02node: debug 17
+homie/espNowBridge/buffer : msg.packetMeta : Object
+{ typeKey: "TYPE_1", typeName: "ANNOUNCE", deviceId: 32, deviceName: "DEV_RPI_DHT_1", rawLen: 10 … }
+27/04/2026, 07:30:02node: debug 6
+homie/espNowBridge/buffer : msg.payload : Object
+{ deviceId: 32, humidity: 46.3, temperature: 19.3, comfort: 1 }
+27/04/2026, 07:30:02node: debug 17
+homie/espNowBridge/buffer : msg.packetMeta : Object
+{ typeKey: "TYPE_4", typeName: "DHT / DS18B20", deviceId: 32, deviceName: "DEV_RPI_DHT_1", rawLen: 12 … }
+27/04/2026, 07:30:03node: debug 1
+homie/espNowBridge/buffer : msg.payload : string[83]
+"{"status":"success","type":"DHT","deviceId":32,"received_at":"2026-04-27 07:30:0..."
+27/04/2026, 07:34:51node: buffer_recived
+homie/espNowBridge/buffer : msg.payload : buffer[12]
+[ 170, 4, 7, 6, 0, 5, 100, 0, 100, 0 … ]
+27/04/2026, 07:34:51node: debug 6
+homie/espNowBridge/buffer : msg.payload : Object
+{ deviceId: 5, pos0: 100, pos1: 0, pos2: 100, pos3: 0 … }
+27/04/2026, 07:34:52node: debug 17
+homie/espNowBridge/buffer : msg.packetMeta : Object
+{ typeKey: "TYPE_7", typeName: "TENDE", deviceId: 5, deviceName: "CTRL_TUYA_TENDE", rawLen: 12 … }

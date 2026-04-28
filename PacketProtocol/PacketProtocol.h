@@ -59,9 +59,9 @@
 // ── Protocol constants
 // ────────────────────────────────────────────────────────
 #define PACKET_MAGIC 0xAA
-#define PACKET_VERSION 0x03
-#define HEADER_SIZE 5     // bytes before payload
-#define PACKET_MIN_SIZE 6 // smallest legal frame
+#define PACKET_VERSION 0x04 // dopo aggiornamento ESP NOW broadcat
+#define HEADER_SIZE 5       // bytes before payload
+#define PACKET_MIN_SIZE 6   // smallest legal frame
 
 // ── Encoding helpers
 // ──────────────────────────────────────────────────────────

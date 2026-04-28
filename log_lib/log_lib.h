@@ -15,7 +15,7 @@
 // ============================================================
 
 #ifndef DEBUG_LEVEL
-  #define DEBUG_LEVEL 3
+  #define DEBUG_LEVEL 1
 #endif
 
 #ifndef UDP_LOG_IP
@@ -36,13 +36,18 @@
 #endif
 
 // Abilitazione Serial Log
-// Disabilita di default se c'è Nextion attivo, a meno che non sia forzato o su Serial1
+// Se USE_NEXTION o DISABLE_SERIAL_LOG sono definiti, la seriale di log viene disabilitata 
+// a meno che non sia esplicitamente forzata con FORCE_SERIAL_LOG.
 #if defined(USE_NEXTION) || defined(DISABLE_SERIAL_LOG)
-    #ifdef FORCE_SERIAL_LOG
-        #define DEBUG_SERIAL_LOG
-    #else
-        #undef DEBUG_SERIAL_LOG
+  #ifdef FORCE_SERIAL_LOG
+    #ifndef DEBUG_SERIAL_LOG
+      #define DEBUG_SERIAL_LOG
     #endif
+  #else
+    #ifdef DEBUG_SERIAL_LOG
+      #undef DEBUG_SERIAL_LOG
+    #endif
+  #endif
 #else
   #ifndef DEBUG_SERIAL_LOG
     #define DEBUG_SERIAL_LOG
@@ -110,7 +115,11 @@ template <typename T> inline String _toStr(T val) { return String(val); }
 inline String _toStr(IPAddress ip) { return ip.toString(); }
 
 #ifdef DEBUG_SERIAL_LOG
-  #define _SERIAL_LOG(prefix, fmt, ...) LOG_SERIAL_PORT.printf(prefix fmt "\n", ##__VA_ARGS__)
+  #if defined(USE_NEXTION) && !defined(FORCE_SERIAL_LOG)
+    #define _SERIAL_LOG(prefix, fmt, ...)
+  #else
+    #define _SERIAL_LOG(prefix, fmt, ...) LOG_SERIAL_PORT.printf(prefix fmt "\n", ##__VA_ARGS__)
+  #endif
 #else
   #define _SERIAL_LOG(prefix, fmt, ...)
 #endif

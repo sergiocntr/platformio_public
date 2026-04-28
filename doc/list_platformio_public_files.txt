@@ -1,0 +1,108 @@
+.
+├── attuale_buffer_decodifica.txt
+├── buffer_decoder_flow.txt
+├── compile_commands_debug.txt
+├── compile_commands.json
+├── doc
+│   ├── AI_com
+│   │   ├── Debugging Chrono2 Gateway Communication.md
+│   │   ├── Fixing Gateway ESP-NOW Communication.md
+│   │   └── Migrating NodeCaldaia To Protocol V3.md
+│   ├── changelog.md
+│   ├── Migrating NodeCaldaia To Protocol V3.md
+│   ├── packet_protocol_reference.md
+│   ├── protocollo_v3_espnow.md
+│   ├── README.md
+│   ├── roadmap.md
+│   └── transport.md
+├── EspNowManager
+│   ├── EspNowManager.cpp
+│   ├── EspNowManager.h
+│   └── library.json
+├── grab_code.sh
+├── lettura_json_come_variabili_globali.txt
+├── list_files.txt
+├── log_lib
+│   ├── library.json
+│   ├── log_lib.cpp
+│   └── log_lib.h
+├── mqttWifi
+│   ├── library.json
+│   ├── mqttWifi.cpp
+│   ├── mqttWifi.h
+│   ├── mqttWifi_transport.cpp
+│   └── mqttWifi_transport.h
+├── NexManager
+│   ├── library.json
+│   ├── NexManager.cpp
+│   └── NexManager.h
+├── nodered_references
+│   ├── buffer_parser.json
+│   ├── config.json -> /home/sergioc/Documenti/progetti/pi3_f2fs/NODERED/buffer_config/config.json
+│   ├── insert_globals.json
+│   ├── tende.txt
+│   ├── time_set_node.js
+│   └── unified_meteo_parser.json
+├── nodeRelay
+│   ├── library.json
+│   ├── nodeRelay.cpp
+│   └── nodeRelay.h
+├── packages
+│   ├── EspNowManager-1.0.0.tar.gz
+│   ├── EspNowManager-1.0.2.tar.gz
+│   ├── EspNowManager-1.0.3.tar.gz
+│   ├── EspNowManager-1.0.4.tar.gz
+│   ├── log_lib-1.0.0.tar.gz
+│   ├── log_lib-1.0.2.tar.gz
+│   ├── log_lib-1.0.3.tar.gz
+│   ├── log_lib-1.0.4.tar.gz
+│   ├── log_lib-1.0.5.tar.gz
+│   ├── mqttWifi-1.0.0.tar.gz
+│   ├── mqttWifi-1.0.2.tar.gz
+│   ├── mqttWifi-2.0.0.tar.gz
+│   ├── mqttWifi-2.0.1.tar.gz
+│   ├── mqttWifi-2.0.2.tar.gz
+│   ├── NexManager-1.0.0.tar.gz
+│   ├── NexManager-1.0.2.tar.gz
+│   ├── nodeRelay-1.0.0.tar.gz
+│   ├── nodeRelay-1.0.2.tar.gz
+│   ├── PacketProtocol-1.0.1.tar.gz
+│   ├── PacketProtocol-1.0.2.tar.gz
+│   ├── PacketProtocol-1.0.3.tar.gz
+│   ├── PacketProtocol-1.0.4.tar.gz
+│   ├── shared_config-1.0.0.tar.gz
+│   ├── shared_config-1.0.2.tar.gz
+│   ├── shared_config-1.0.3.tar.gz
+│   ├── udpLogger-1.0.0.tar.gz
+│   ├── udpLogger-1.0.2.tar.gz
+│   └── udpLogger-1.0.3.tar.gz
+├── PacketProtocol
+│   ├── devices.h
+│   ├── library.json
+│   ├── PacketProtocol.cpp
+│   └── PacketProtocol.h
+├── pack_libs.sh
+├── platformio.ini
+├── scratch_patch.py
+├── shared_config
+│   ├── library.json
+│   ├── shared_config.cpp
+│   └── shared_config.h
+├── tools
+│   ├── install_shfmt.sh
+│   ├── mariner.js
+│   ├── mqttWifiMessages.cpp
+│   ├── nodered.js
+│   ├── packet_generator.py
+│   └── tree.txt
+├── txt
+│   ├── chrono2.txt
+│   ├── energyMain.txt
+│   ├── ESP_Caminetto.txt
+│   ├── EspNowGateway.txt
+│   ├── nodecaldaia.txt
+│   └── PROJECT.txt
+├── version_check.h
+└── version.h
+
+14 directories, 92 files

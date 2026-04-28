@@ -16,8 +16,10 @@
 // Canale WiFi fisso per ESP-NOW (deve coincidere col router)
 #define WIFI_CHANNEL_GATEWAY 12
 
-// MAC Address dell'ESP32 Gateway (da aggiornare dopo il primo boot del Gateway)
+// MAC Address dell'ESP32 Gateway — interfaccia STA (da aggiornare dopo il primo boot del Gateway)
 const uint8_t ESPNOW_GATEWAY_MAC[6] = {0x58, 0xbf, 0x25, 0x36, 0xd2, 0xb0};
+// MAC interfaccia SoftAP del Gateway (= STA MAC + 1). I frame broadcast ESP-NOW escono da questa interfaccia.
+const uint8_t ESPNOW_GATEWAY_AP_MAC[6] = {0x58, 0xbf, 0x25, 0x36, 0xd2, 0xb1};
 
 enum SensIdx {
   INT = 0, // Interno (Chrono)
