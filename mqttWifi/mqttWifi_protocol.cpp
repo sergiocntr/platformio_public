@@ -25,8 +25,8 @@ void handleAckPacket(const uint8_t *payload, size_t len) {
   if (len >= 8 && payload[0] == 0xAA && payload[2] == 0x00) {
     uint8_t rcvId = payload[5];
     LOG_VERBOSE("[ACK] Ricevuto da ID: 0x%02X (Atteso: 0x%02X o 0x%02X)\n", rcvId, m_deviceID, expectedAckDeviceID);
-    // Accetta l'ACK solo se è per noi o per il dispositivo che stiamo comandando
-    if (rcvId == m_deviceID || (expectedAckDeviceID != 0x00 && rcvId == expectedAckDeviceID)) {
+    // Accetta l'ACK se è per noi, se è un Broadcast (0xFF) o se è quello che aspettiamo
+    if (rcvId == m_deviceID || rcvId == 0xFF || (expectedAckDeviceID != 0x00 && rcvId == expectedAckDeviceID)) {
       uint8_t status = payload[6];
       ackStatus = (AckState)status;
       

@@ -99,6 +99,7 @@ class WifiTransport : public IMqttTransport {
 public:
   bool init() override {
     LOG_VERBOSE("[TRANSPORT] WifiTransport init\n");
+    delay(100); // Permetti al WiFi di stabilizzarsi
     return true;
   }
 

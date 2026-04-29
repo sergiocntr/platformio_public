@@ -388,7 +388,7 @@ size_t pp_buildPacket(uint8_t type, const uint8_t *payload, uint16_t payloadLen,
  * @deprecated Use mqttWifi::sendBinaryCommandWithAck instead.
  * This remains for legacy binary support but lacks robust ACK handling.
  */
-void pp_sendLegacyCommand(uint8_t deviceID, uint8_t command, uint8_t value);
+//void pp_sendLegacyCommand(uint8_t deviceID, uint8_t command, uint8_t value);
 
 /**
  * Validate a received frame (magic + size + XOR checksum).
