@@ -1,19 +1,16 @@
 #pragma once
 
-#include <stdint.h>
 #include <stddef.h>
+#include <stdint.h>
 
 // Trasport layer per la libreria mqttWifi (astrazione over WiFi/ESPNOW).
 
-enum class MqttTransportType {
-  WIFI,
-  ESPNOW,
-  DUMMY
-};
+// Dichiara l'enum a livello globale (o dentro un namespace separato)
+enum class NetworkTransportType { WIFI_MQTT, ESPNOW, DUMMY, MATTER };
 
-class IMqttTransport {
+class INetworkTransport {
 public:
-  virtual ~IMqttTransport() {}
+  virtual ~INetworkTransport() {}
 
   virtual bool init() = 0;
   virtual bool connect() = 0;
@@ -27,15 +24,19 @@ public:
   virtual void keepAlive() = 0;
 };
 
+#include <PacketProtocol.h>
 #include <shared_config.h>
 
-IMqttTransport *createMqttTransport(MqttTransportType type);
+// Forward declaration (senza namespace)
+INetworkTransport *createNetworkTransport(NetworkTransportType type);
 
 #if defined(USE_MQTT_ESPNOW)
-static constexpr MqttTransportType DEFAULT_MQTT_TRANSPORT = MqttTransportType::ESPNOW;
+static constexpr NetworkTransportType DEFAULT_NETWORK_TRANSPORT =
+    NetworkTransportType::ESPNOW;
 #elif defined(USE_MQTT_WIFI) || defined(MQTT_TRANSPORT_WIFI)
-static constexpr MqttTransportType DEFAULT_MQTT_TRANSPORT = MqttTransportType::WIFI;
+static constexpr NetworkTransportType DEFAULT_NETWORK_TRANSPORT =
+    NetworkTransportType::WIFI_MQTT;
 #else
-static constexpr MqttTransportType DEFAULT_MQTT_TRANSPORT = MqttTransportType::WIFI;
+static constexpr NetworkTransportType DEFAULT_NETWORK_TRANSPORT =
+    NetworkTransportType::WIFI_MQTT;
 #endif
-

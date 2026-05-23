@@ -1,18 +1,15 @@
 #pragma once
 #include <Arduino.h>
+#include <cstdint>
+#include "SystemProfiles.h"
 #include <log_lib.h>
-#ifdef ESP32_MQTT
 // ========== SELEZIONE TRASPORTO (GLOBAL) ==========
 // Rendi uno dei due attivo per tutta la rete:
 #ifndef USE_MQTT_WIFI
-#define USE_MQTT_WIFI // Standard: WiFi + MQTT (Broker TCP)
+  #define USE_MQTT_WIFI // Standard: WiFi + MQTT (Broker TCP)
 #endif
 
-#else
-#ifndef USE_MQTT_ESPNOW
-#define USE_MQTT_ESPNOW // Bridge: ESP-NOW -> ESP32 Gateway -> MQTT
-#endif
-#endif
+
 // Canale WiFi fisso per ESP-NOW (deve coincidere col router)
 #define WIFI_CHANNEL_GATEWAY 12
 
@@ -20,6 +17,13 @@
 const uint8_t ESPNOW_GATEWAY_MAC[6] = {0x58, 0xbf, 0x25, 0x36, 0xd2, 0xb0};
 // MAC interfaccia SoftAP del Gateway (= STA MAC + 1). I frame broadcast ESP-NOW escono da questa interfaccia.
 const uint8_t ESPNOW_GATEWAY_AP_MAC[6] = {0x58, 0xbf, 0x25, 0x36, 0xd2, 0xb1};
+
+#define TIME_MOLTIPLIER 60 * 1000UL // 60_000UL  // 1 minuto (60_000 ms)
+#ifdef TEST_DEBUG
+const uint32_t time_between_sensors_reads = 1 * TIME_MOLTIPLIER ; // 1 minuto
+#else
+const uint32_t time_between_sensors_reads = 15 * TIME_MOLTIPLIER ; // 15 minuti
+#endif
 
 enum SensIdx {
   INT = 0, // Interno (Chrono)
@@ -48,6 +52,7 @@ struct __attribute__((packed)) SystemState {
 	bool sensor_alive[MAX_SENS]; // specifica se il sensore e' funzionante (true) o no (false)
   float temps[MAX_SENS];
   float hums[MAX_SENS];
+  uint8_t ComfortRatio[MAX_SENS];
   float waterTemp;
   uint16_t powerW;
   uint8_t pos[6]; // slider tende

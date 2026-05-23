@@ -14,12 +14,20 @@ uint32_t lastTimeSynced = 0;
 const uint32_t SYNC_TIMEOUT = 120000; // 2 minuti
 
 static PacketHandler s_appHandler = nullptr;
-extern IMqttTransport
+extern INetworkTransport
     *mqttTransport; // Dichiarazione esterna (dal transport o main)
-extern MqttTransportType currentTransport;
+extern NetworkTransportType currentTransport;
 extern uint8_t expectedAckDeviceID;
 
 void registerPacketHandler(PacketHandler handler) { s_appHandler = handler; }
+
+} // namespace mqttWifi (temporanea uscita)
+
+// Funzione weak per la salute dei sensori: i progetti la possono sovrascrivere.
+// Viene messa nel namespace globale così i vari file main.cpp possono sovrascriverla senza problemi.
+__attribute__((weak)) uint8_t getLocalHealthMask() { return 0x00; }
+
+namespace mqttWifi {
 
 void handleAckPacket(const uint8_t *payload, size_t len) {
   if (len >= 8 && payload[0] == 0xAA && payload[2] == 0x00) {
@@ -38,9 +46,9 @@ void handleAckPacket(const uint8_t *payload, size_t len) {
 
       // --- AUTO-SWITCH TRANSPORT ---
       // Se il Gateway ci suggerisce di passare a ESP-NOW e siamo ancora in WiFi
-      if (status == 0x05 && getMqttTransport() != MqttTransportType::ESPNOW) {
+      if (status == 0x05 && getNetworkTransport() != NetworkTransportType::ESPNOW) {
         LOG_INFO("[ACK] Gateway richiede lo switch a ESP-NOW. Eseguo...");
-        setMqttTransport(MqttTransportType::ESPNOW);
+        setNetworkTransport(NetworkTransportType::ESPNOW);
       }
       LOG_VERBOSE("[ACK BIN] Match per ID 0x%02X -> Status: %d\n", rcvId,
                   ackStatus);
@@ -74,6 +82,9 @@ bool pp_dispatchPacket(const uint8_t *payload, unsigned int length) {
   if (pkt.header.type == 0x08) { // TYPE_TIME
     lastTimeSynced = millis();
     LOG_VERBOSE("[DISPATCH] Heartbeat TIME ricevuto. Watchdog resettato.");
+    
+    // Risposta automatica al Gateway per confermare la presenza e lo stato sensori
+    sendBinaryAck(m_deviceID, TYPE_TIME, ::getLocalHealthMask());
   }
 
   // ── 3. TYPE_ACK ──────────────────────────────────────────────
@@ -107,7 +118,7 @@ bool pp_dispatchPacket(const uint8_t *payload, unsigned int length) {
       LOG_INFO("[DISPATCH] CMD_SYS_RESET (target=0x%02X)", d->deviceID);
       if ((d->deviceID == m_deviceID) || (d->deviceID == 0xFF)) {
         delay(100);
-        if (getMqttTransport() == MqttTransportType::WIFI) {
+        if (getNetworkTransport() == NetworkTransportType::WIFI_MQTT) {
           client.disconnect();
           WiFi.disconnect();
         }
@@ -142,12 +153,12 @@ void sendAnnounce() {
   publish(espNowBridgeBuffer, buf, sz, false);
 }
 
-void sendBinaryAck(uint8_t deviceID, uint8_t command, bool on) {
+void sendBinaryAck(uint8_t deviceID, uint8_t command, uint8_t value) {
   ackData d;
   d.deviceID = deviceID;
   d.status = ACK;
   d.cmdEcho = command;
-  d.valEcho = on ? 1 : 0;
+  d.valEcho = value;
 
   uint8_t buffer[HEADER_SIZE + sizeof(ackData) + 1];
   size_t packetSize =
@@ -159,7 +170,7 @@ AckState waitForAck(uint32_t timeoutMs) {
   unsigned long start = millis();
 
   while (millis() - start < timeoutMs) {
-    if (getMqttTransport() == MqttTransportType::ESPNOW) {
+    if (getNetworkTransport() == NetworkTransportType::ESPNOW) {
       // BUG FIX: svuota TUTTA la FIFO ad ogni iterazione.
       // Prima si leggeva un solo pacchetto ogni 5ms: se arrivavano in
       // sequenza Rebroadcast-Comando + Telemetria-BOILER + ACK, l'ACK
@@ -188,6 +199,7 @@ AckState waitForAck(uint32_t timeoutMs) {
 
 AckState publishWithAck(const char *topic, const uint8_t *payload,
                         size_t length, uint8_t retries, uint32_t timeoutMs) {
+  AckState lastRes = NO_ACK;
   for (int i = 0; i <= retries; i++) {
     ackStatus = NO_ACK;
     if (!publish(topic, payload, length, false)) {
@@ -195,13 +207,16 @@ AckState publishWithAck(const char *topic, const uint8_t *payload,
       continue;
     }
 
-    AckState res = waitForAck(timeoutMs);
-    if (res == ACK || res == END) {
-      return res;
+    lastRes = waitForAck(timeoutMs);
+    if (lastRes == ACK || lastRes == END) {
+      return lastRes;
+    }
+    if (lastRes == FAILED || lastRes == ERROR || lastRes == SWITCH_TRANSPORT) {
+      return lastRes; // Esci subito in caso di errori logici (evita retry inutili)
     }
     delay(100);
   }
-  return NO_ACK;
+  return lastRes;
 }
 
 AckState sendBinaryCommandWithAck(uint8_t deviceID, bool on, uint8_t retries,

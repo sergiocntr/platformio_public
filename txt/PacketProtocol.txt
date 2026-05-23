@@ -1,0 +1,412 @@
+
+// ==========================================
+// FILE: /media/progetti_ext/PROJECT/platformio_public/PacketProtocol/PacketProtocol.cpp
+// ==========================================
+
+#include "PacketProtocol.h"
+#include <string.h>
+
+/**
+ * @file PacketProtocol.cpp
+ * @brief Implementation for the standardized communication buffer protocol.
+ */
+
+// ── XOR checksum ─────────────────────────────────────────────────────────────
+uint8_t pp_calculateXOR(const uint8_t *data, size_t length) {
+    uint8_t result = 0;
+    for (size_t i = 0; i < length; i++) {
+        result ^= data[i];
+    }
+    return result;
+}
+
+// ── Frame construction ────────────────────────────────────────────────────────
+size_t pp_buildPacket(uint8_t type,
+                      const uint8_t *payload, uint16_t payloadLen,
+                      uint8_t *outBuffer) {
+    if (outBuffer == NULL) return 0;
+
+    // 1. Header (5 bytes)
+    outBuffer[0] = PACKET_MAGIC;
+    outBuffer[1] = PACKET_VERSION;
+    outBuffer[2] = type;
+    outBuffer[3] = (uint8_t)(payloadLen & 0xFF);         // length LSB
+    outBuffer[4] = (uint8_t)((payloadLen >> 8) & 0xFF);  // length MSB
+
+    // 2. Payload
+    if (payload != NULL && payloadLen > 0) {
+        memcpy(outBuffer + HEADER_SIZE, payload, payloadLen);
+    }
+
+    // 3. XOR checksum over header + payload
+    uint8_t checksum = pp_calculateXOR(outBuffer, HEADER_SIZE + payloadLen);
+    outBuffer[HEADER_SIZE + payloadLen] = checksum;
+
+    return HEADER_SIZE + payloadLen + 1;
+}
+
+// ── Frame validation ──────────────────────────────────────────────────────────
+int pp_validatePacket(const uint8_t *buffer, size_t bufferSize) {
+    if (buffer == NULL || bufferSize < PACKET_MIN_SIZE) return -1;
+
+    // 1. Magic word
+    if (buffer[0] != PACKET_MAGIC) return -2;
+
+    // 2. Declared payload length
+    uint16_t payloadLen = (uint16_t)buffer[3] | ((uint16_t)buffer[4] << 8);
+
+    // 3. Total size must match: HEADER(5) + payload + checksum(1)
+    if (bufferSize != (size_t)(HEADER_SIZE + payloadLen + 1)) return -3;
+
+    // 4. XOR checksum (excludes the checksum byte itself)
+    uint8_t expected = pp_calculateXOR(buffer, HEADER_SIZE + payloadLen);
+    if (buffer[HEADER_SIZE + payloadLen] != expected) return -4;
+
+    return 0;
+}
+
+// ── Frame parsing (validate + decode) ────────────────────────────────────────
+int pp_parsePacket(const uint8_t *buffer, size_t bufferSize, ParsedPacket *out) {
+    if (out == NULL) return -5;
+
+    int rc = pp_validatePacket(buffer, bufferSize);
+    if (rc != 0) return rc;
+
+    out->header.magic         = buffer[0];
+    out->header.version       = buffer[1];
+    out->header.type          = buffer[2];
+    out->header.payloadLength = (uint16_t)buffer[3] | ((uint16_t)buffer[4] << 8);
+
+    // Zero-copy: point directly into the caller's buffer
+    out->payload = (out->header.payloadLength > 0)
+                   ? (buffer + HEADER_SIZE)
+                   : NULL;
+
+    return 0;
+}
+
+
+// ==========================================
+// FILE: /media/progetti_ext/PROJECT/platformio_public/PacketProtocol/devices.h
+// ==========================================
+
+#ifndef DEVICES_H
+#define DEVICES_H
+
+/**
+ * @file devices.h
+ * @brief Device and sensor registry.
+ *
+ * DeviceID encoding — 1 byte, two nibbles:
+ *
+ *   0xZY
+ *     Z = physical node  (the board)
+ *     Y = sensor on that node (0 = first/only sensor)
+ *
+ * Examples:
+ *   0x50 = node 5, sensor 0 (DS18B20 on caminetto board)
+ *   0x51 = node 5, sensor 1 (Thermocouple K on same board)
+ *   0x10 = node 1, sensor 0 (DHT22 on chrono board)
+ *   0x11 = node 1, sensor 1 (second DHT22 on same chrono board, future)
+ *
+ * PacketType describes HOW to deserialise the payload  → PacketProtocol.h
+ * deviceID   describes WHO sent it (node + sensor)
+ *
+ * Adding a new sensor on an existing node  → new Y on same Z
+ * Adding a new node                        → new Z, Y starts at 0
+ *
+ * ┌────────┬───────────────────────┬──────────────┬──────────────┬────────────────────────────────────────┐
+ * │  ID    │ Name                  │ Location     │ Hardware     │ Notes │
+ * ├────────┼───────────────────────┼──────────────┼──────────────┼────────────────────────────────────────┤
+ * │ 0x01   │ CTRL_MAIN_CONTROL     │ Salotto      │ ESP8266      │ Toglie
+ * tensione ai servizi della casa  │ │ 0x02   │ CTRL_AIR_COND         │
+ * Corridoio    │ ESP8266 fut. │ Payload: on/off, caldo/freddo, temp    │ │ 0x03
+ * │ CTRL_HEAT_SYSTEM      │ Esterno      │ ESP8266      │ Controllo
+ * riscaldamento                │ │ 0x04   │ CTRL_HOT_WATER        │ Esterno │
+ * ESP8266      │ Controllo acqua calda sanitaria        │ │ 0x05   │
+ * CTRL_TUYA_TENDE       │ Casa         │ Node-RED     │ Tuya blind controller
+ * bridge           │
+ * ├────────┼───────────────────────┼──────────────┼──────────────┼────────────────────────────────────────┤
+ * │ 0x10   │ DEV_CHRONO_DHT_1      │ Salotto      │ ESP/CHRONO   │ DHT22 – sul
+ * dispositivo                │ │ 0x20   │ DEV_RPI_DHT_1         │ Camera
+ * grande│ Raspberry 3  │ DHT22 – sul dispositivo                │ │ 0x30   │
+ * DEV_BAGNO_DS18B20     │ Bagno        │ ESP8266      │ DS18B20 – Display
+ * Nextion              │ │ 0x40   │ DEV_ENERGYMAIN_PZEM   │ Salotto      │
+ * ESP8266      │ PZEM – quadro elettrico                │ │ 0x50   │
+ * DEV_CAMINETTO         │ Salotto      │ ESP8266      │ DS18 + Sonda K + Fan
+ * PID (caminettoData)│ │ 0x70   │ DEV_ESP_CAMERA        │ Camera pic.  │
+ * ESP32C3      │ riservato per sensori umidita' suolo -piante │ │ 0x80-0x9F │
+ * ESP8266      │ Termocoppia K – sul dispositivo        │ │ 0xD0   │
+ * DEV_MARINER_BME280    │ Esterno      │ ESP01        │ BME280 – weather
+ * station               │ │ 0xE0   │ DEV_CALDAIA_DS18B20   │ Esterno      │
+ * ESP8266      │ DS18B20 – caldaia                      │
+ * ├────────┼───────────────────────┼──────────────┼──────────────┼────────────────────────────────────────┤
+ * │ 0xFF   │ NODE_RED              │ Casa         │ Node-RED     │ Broadcast │
+ * └────────┴───────────────────────┴──────────────┴──────────────┴────────────────────────────────────────┘
+ */
+
+// ── Controllers / actuators (0x00-0x0F) ──────────────────────────────────────
+#define CTRL_MAIN_CONTROL 0x01 // Salotto – ESP8266 – toglie tensione ai servizi
+#define CTRL_AIR_COND 0x02     // Corridoio – ESP8266 (futuro) – condizionatore
+#define CTRL_HEAT_SYSTEM 0x03  // Esterno – ESP8266 – riscaldamento
+#define CTRL_HOT_WATER 0x04    // Esterno – ESP8266 – acqua calda sanitaria
+#define CTRL_TUYA_TENDE                                                        \
+  0x05 // Casa – Node-RED bridge – tende Tuya → struct tendeData
+
+// ── Sensors (0x10-0xEF)
+// ───────────────────────────────────────────────────────
+#define DEV_CHRONO_DHT_1                                                       \
+  0x10 // Salotto – CHRONO – DHT22 sul dispositivo → struct dhtData
+#define DEV_RPI_DHT_1                                                          \
+  0x20 // Camera grande – Raspberry 3 – DHT22 sul dispositivo → struct dhtData
+#define DEV_BAGNO_DS18B20                                                      \
+  0x30 // Bagno – ESP8266 Nextion – DS18B20 → struct dhtData
+#define DEV_ENERGYMAIN_PZEM                                                    \
+  0x40 // Salotto – ESP8266 – PZEM quadro elettrico → struct EneMainData
+#define DEV_CAMINETTO                                                          \
+  0x50 // Salotto – ESP8266 – DS18B20 caminetto -Termocoppia K - Pid ventola →
+       // struct caminettoData
+#define DEV_ESP_CAMERA 0x70 // Camera piccola – ESP8266
+//Attenzione : indirizzi fra 0x80 e 0x9F riservati per sensori piante
+#define DEV_MARINER_BME280                                                     \
+  0xD0 // Esterno – ESP01 – BME280 weather station → struct meteoData
+#define DEV_CALDAIA_DS18B20                                                    \
+  0xE0 // Esterno – ESP8266 – DS18B20 caldaia → struct dhtData
+
+// ── Reserved ─────────────────────────────────────────────────────────────────
+// 0xF0-0xFE  test / development nodes
+#define DEV_ESP_NOW_GATEWAY 0xFE // ESP NOW gateway
+#define DEV_MASTER 0xFF  // Node-RED Master / Broadcast ID
+#define DEV_UNKNOWN 0xFF // Alias for compatibility
+
+#endif // DEVICES_H
+
+
+// ==========================================
+// FILE: /media/progetti_ext/PROJECT/platformio_public/PacketProtocol/PacketProtocol.h
+// ==========================================
+
+#ifndef PACKET_PROTOCOL_H
+#define PACKET_PROTOCOL_H
+
+#include <devices.h>
+#include <stddef.h>
+#include <stdint.h>
+
+// ── Protocol constants
+#define PACKET_MAGIC 0xAA
+#define PACKET_VERSION 0x05 // Aggiunto uptime a boiler, pzem e node report
+#define HEADER_SIZE 5       // bytes before payload
+#define PACKET_MIN_SIZE 6   // smallest legal frame
+
+// ── Encoding helpers
+#define PP_TEMP_OFFSET 50.0f
+#define PP_TEMP_SCALE 128.0f
+#define PP_HUM_SCALE 128.0f
+#define PP_PRESS_SCALE 16.0f
+
+#define PP_ENCODE_TEMP(t) ((uint16_t)(((t) + PP_TEMP_OFFSET) * PP_TEMP_SCALE))
+#define PP_DECODE_TEMP(v) ((v) / PP_TEMP_SCALE - PP_TEMP_OFFSET)
+#define PP_ENCODE_HUM(h) ((uint16_t)((h) * PP_HUM_SCALE))
+#define PP_DECODE_HUM(v) ((v) / PP_HUM_SCALE)
+#define PP_ENCODE_PRESS(p) ((uint16_t)((p) * PP_PRESS_SCALE))
+#define PP_DECODE_PRESS(v) ((v) / PP_PRESS_SCALE)
+
+// ── Packet types
+typedef enum {
+  TYPE_ACK = 0x00,
+  TYPE_ANNOUNCE = 0x01,
+  TYPE_COMMAND = 0x02,
+  TYPE_METEO = 0x03,
+  TYPE_DHT = 0x04,
+  TYPE_DS18 = 0x04,
+  TYPE_BME = 0x05,
+  TYPE_PZEM = 0x06,
+  TYPE_TENDE = 0x07,
+  TYPE_TIME = 0x08,
+  TYPE_BOILER = 0x09,
+  TYPE_CAMINETTO = 0x0A,
+  TYPE_PID_CONFIG = 0x0B,
+  TYPE_TENDE_COMMAND = 0x0C,
+  TYPE_NODE_REPORT = 0x0D,
+  TYPE_UNKNOWN = 0xFF
+} PacketType;
+
+#pragma pack(push, 1)
+struct ackData {
+  uint8_t deviceID;
+  uint8_t status;
+  uint8_t cmdEcho;
+  uint8_t valEcho;
+};
+
+#define AC_OK 0x01
+#define AC_END 0x02
+#define AC_FAILED 0x03
+#define AC_ERROR 0x04
+#define AC_SWITCH_TO_ESPNOW 0x05
+
+struct announceData {
+  uint8_t deviceID;
+  uint8_t protoVersion;
+  uint16_t fwVersion;
+};
+
+struct caminettoData {
+  uint8_t deviceID;
+  uint16_t tempAmb;
+  uint16_t tempK;
+  uint8_t fanPid;
+};
+
+struct pidConfigData {
+  uint8_t deviceID;
+  uint8_t updateMask;
+  uint8_t sTemp;
+  float sMinFan;
+  float sMaxFan;
+  float P;
+  float I;
+  float D;
+};
+
+struct meteoData {
+  uint8_t deviceID;
+  int16_t humidityBMP;
+  int16_t temperatureBMP;
+  int16_t externalPressure;
+  uint16_t battery;
+  uint16_t moisture;
+  uint8_t padding[3];
+  uint8_t counter;
+  uint8_t checksum;
+};
+
+struct dhtData {
+  uint8_t deviceID;
+  uint16_t humidity;
+  uint16_t temperature;
+  uint8_t comfort;
+  uint32_t uptime;      // v5.0
+};
+
+struct ds18Data {
+  uint8_t deviceID;
+  uint16_t humidity;
+  uint16_t temperature;
+  uint8_t comfort;
+  uint32_t uptime;      // v5.0
+};
+
+struct bmeData {
+  uint8_t deviceID;
+  uint16_t humidity;
+  uint16_t temperature;
+  uint16_t pressure;
+  uint16_t battery;
+};
+
+struct EneMainData {
+  uint8_t deviceID;
+  uint16_t v;
+  uint16_t i;
+  uint16_t c;
+  uint16_t e;
+  uint32_t uptime;      // v5.0
+};
+
+struct tendeData {
+  uint8_t deviceID;
+  uint8_t pos[5];
+};
+
+struct tendeCmdData {
+  uint8_t deviceID;
+  uint8_t blindIndex;
+  uint8_t command;
+  uint8_t val;
+};
+
+struct timeData {
+  uint8_t deviceID;
+  uint8_t hour;
+  uint8_t minute;
+  uint8_t day;
+};
+
+struct boilerData {
+  uint8_t deviceID;
+  uint16_t temperature;
+  uint16_t valvePos;
+  uint32_t uptime;      // v5.0
+};
+
+struct cmdData {
+  uint8_t deviceID;
+  uint8_t command;
+  uint8_t value;
+};
+
+struct nodeEntry {
+  uint8_t deviceID;
+  uint8_t nodeType;
+  uint16_t fwVersion;
+  uint32_t lastSeenSec;
+  uint32_t uptimeSec;
+  uint8_t mac[6];
+  uint8_t txFailCount;
+  uint8_t rssi;
+};
+
+struct nodeReportData {
+  uint8_t deviceID;
+  uint8_t nodeCount;
+};
+
+struct nodeEntryCompact {
+  uint8_t deviceID;
+  uint8_t flags;
+  uint16_t fwVersion;
+  uint32_t lastSeenSec;
+  uint32_t uptimeSec;   // v5.0
+  uint8_t mac[6];
+  uint8_t txFailCount;
+  uint8_t rssi;
+}; 
+
+typedef enum {
+  CMD_POWER_OFF = 0x00,
+  CMD_POWER_ON = 0x01,
+  CMD_SYS_RESET = 0xEE,
+  CMD_SYS_SLEEP = 0xEF,
+  CMD_SYS_UPDATE = 0xF0
+} CommandID;
+
+struct StandardHeader {
+  uint8_t magic;
+  uint8_t version;
+  uint8_t type;
+  uint16_t payloadLength;
+};
+#pragma pack(pop)
+
+typedef struct {
+  StandardHeader header;
+  const uint8_t *payload;
+} ParsedPacket;
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+uint8_t pp_calculateXOR(const uint8_t *data, size_t length);
+size_t pp_buildPacket(uint8_t type, const uint8_t *payload, uint16_t payloadLen, uint8_t *outBuffer);
+int pp_validatePacket(const uint8_t *buffer, size_t bufferSize);
+int pp_parsePacket(const uint8_t *buffer, size_t bufferSize, ParsedPacket *out);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif // PACKET_PROTOCOL_H
+

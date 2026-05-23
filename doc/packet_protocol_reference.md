@@ -92,10 +92,12 @@ Utilizzato per confermare la ricezione di un pacchetto dalGateway o dal Server.
  Payload = 4 byte    Frame totale = 10 byte
 ```
 
-- `deviceID`: Il destinatario/attuatore originale (es: `0x04` per acqua calda)
-- `status`: 1=OK, 2=END, 3=FAILED, 4=ERROR, 5=SWITCH_TRANSPORT
-- `cmdEcho`: Il comando originale che ha scatenato la risposta (es: `CMD_POWER_ON` o `PKT_ANNOUNCE`)
-- `valEcho`: Lo stato reale risultante (es: `1` per ON, `0` per OFF)
+- Byte 0: `deviceID`
+- Byte 1: `status` (1=OK, 2=END, 3=FAILED, 4=ERROR, 5=SWITCH_TRANSPORT)
+- Byte 2: `cmdEcho` (comando eseguito - 0xFF = N/A per sensori puri)
+- Byte 3: `valEcho` (valore risultante - 0xFF = N/A per sensori puri)
+
+**Nota (v.4.6):** PEr uniformare la lettura del pacchetto allal unghezza di 4 byte ,nella risposta al invio di dati da parte dei vari nodi sensori (ie Sonda Meteo ), non viene piu' considerato il byte 2 e 3  (`cmdEcho` ,`valEcho`), che ora sono sempre `0xFF` .
 
 **Nota (v3.3):** Lo status `0x05 (SWITCH_TRANSPORT)` viene usato dal Gateway in risposta a un `ANNOUNCE` via radio per comandare al nodo di spegnere il WiFi e restare solo in ESP-NOW.
 
@@ -467,6 +469,7 @@ const info     = buf.readUInt16LE(3) > 2 ? buf.readUInt8(7) : null;
 | `0x40`   | DEV_ENERGYMAIN_PZEM    | PZEM          | TYPE_PZEM      | Salotto        |
 | `0x50`   | DEV_CAMINETTO          | Multi         | TYPE_CAMINETTO | Salotto        |
 | `0x70`   | DEV_ESP_CAMERA         | DHT22         | TYPE_DHT       | Camera piccola |
+| `0x80-AF`| RISERVATI PIANTE       | SENS HUM SUOLO| TYPE_METEO     | Esterno        |
 | `0xD0`   | DEV_MARINER_BME280     | BME280 +batt  | TYPE_METEO     | Esterno        |
 | `0xE0`   | DEV_CALDAIA_DS18B20    | DS18B20       | TYPE_DHT       | Esterno        |
 | `0xFF`   | DEV_MASTER             | Node-RED      | Multi          | Casa (Server)  |

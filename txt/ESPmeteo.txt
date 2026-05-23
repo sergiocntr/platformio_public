@@ -1,0 +1,1562 @@
+
+// ==========================================
+// FILE: /media/progetti_ext/PROJECT/Platformio/finiti/espmeteo/ESPmeteo/src/WIFIError.h
+// ==========================================
+
+#include "debugutils.h"
+
+#ifndef WIFIERROR_H
+#define WIFIERROR_H
+
+enum class WIFIError {
+    SUCCESS,
+    CONNECTION_FAILED
+};
+
+#ifdef DEBUGMIO
+static const char* const WIFIError_messages[] __attribute__((unused)) = {
+    "WiFi connection OK.",
+    "WiFi connection failed."
+};
+static const char* const WIFIError_className __attribute__((unused)) = "WIFIError";
+#endif
+
+#endif // WIFIERROR_H
+
+
+
+// ==========================================
+// FILE: /media/progetti_ext/PROJECT/Platformio/finiti/espmeteo/ESPmeteo/src/debugutils.h
+// ==========================================
+
+#pragma once
+#define DEBUGMIO // Necessario per mantenere gli array di stringhe di errore
+
+#include <Arduino.h>
+#include <log_lib.h>
+#include "m_errors.h"
+
+// Macro per debug generico (rimossa, usare direttamente LOG_INFO, LOG_VERBOSE, ecc.)
+// #define DEBUG_PRINT(...) LOG_INFO("%s", _toStr(__VA_ARGS__).c_str())
+
+// Macro per errori specifici inoltrato a LOG_ERROR
+#define ERROR_PRINT(className, errorEnum, errorCode)                      \
+    LOG_ERROR("%d Log di %s - %d: %s", __LINE__, className,               \
+              static_cast<int>(errorCode),                                \
+              errorEnum##_messages[static_cast<int>(errorCode)])
+
+
+
+// ==========================================
+// FILE: /media/progetti_ext/PROJECT/Platformio/finiti/espmeteo/ESPmeteo/src/MQTTError.h
+// ==========================================
+
+#include "debugutils.h"
+
+#ifndef MQTTERROR_H
+#define MQTTERROR_H
+
+enum class MQTTError {
+    SUCCESS,
+    CONNECTION_FAILED,
+    PUBLISH_FAILED,
+    SUBSCRIBE_FAILED,
+    ACK_FAILED,
+    ACK_OK,
+    END_OK
+};
+
+#ifdef DEBUGMIO
+static const char* const MQTTError_messages[] __attribute__((unused)) = {
+    "MQTT connection OK!",
+    "MQTT connection failed.",
+    "Message publication failed.",
+    "Topic subscription failed.",
+    "ACK not received within timeout.",
+    "Partial data sent and confirmed successfully!",
+    "Total data sent and confirmed successfully!"
+};
+static const char* const MQTTError_className __attribute__((unused)) = "MQTTError";
+#endif
+
+#endif // MQTTERROR_H
+
+
+
+// ==========================================
+// FILE: /media/progetti_ext/PROJECT/Platformio/finiti/espmeteo/ESPmeteo/src/SENSORError.h
+// ==========================================
+
+#include "debugutils.h"
+
+#ifndef SENSORERROR_H
+#define SENSORERROR_H
+
+enum class SENSORError {
+    BME280_SUCCESS,
+    BME280_CONNECTION_FAILED,
+    BME280_DATA_ERROR,
+    SOIL_SENSOR_ERROR
+};
+
+#ifdef DEBUGMIO
+static const char* const SENSORError_messages[] __attribute__((unused)) = {
+    "BME280 OK.",
+    "BME280 sensor not responding.",
+    "Invalid data read from BME280 sensor.",
+    "Soil Moisture sensor not responding or invalid data."
+};
+static const char* const SENSORError_className __attribute__((unused)) = "SENSORError";
+#endif
+
+#endif // SENSORERROR_H
+
+
+
+// ==========================================
+// FILE: /media/progetti_ext/PROJECT/Platformio/finiti/espmeteo/ESPmeteo/src/eeprom.h
+// ==========================================
+
+// eeprommio.h
+#pragma once
+#include "impostazioni.h"
+#include <Arduino.h>
+
+namespace nEEPROM {
+  bool writeToEEPROM(uint16_t startAddr, const uint8_t *buffer, uint8_t length);
+  bool readFromEEPROM(uint16_t startAddr, uint8_t *buffer, uint8_t length);
+  bool readEEPROMDataWithRetry(uint16_t address, uint8_t *buffer, uint8_t length, uint8_t maxRetries = 3);
+  bool writeEEPROMDataAndVerify(uint16_t address, const uint8_t *buffer, uint8_t length);
+  void resetMemory();
+} // namespace nEEPROM
+
+
+
+// ==========================================
+// FILE: /media/progetti_ext/PROJECT/Platformio/finiti/espmeteo/ESPmeteo/src/impostazioni.h
+// ==========================================
+
+// impostazioni.h
+#pragma once
+#include <Arduino.h>
+#include <shared_config.h>
+// --- Pin Definitions ---
+const int default_sda_pin = 0;
+const int default_scl_pin = 2;
+
+// --- I2C / EEPROM Configuration ---
+const int SLAVE_ATTINY_ADDRESS = 2;
+const int EEPROM_I2C_ADDRESS = 0x50; // Standard I2C EEPROM address
+
+/**
+ * @brief Structure for circular buffer management in EEPROM.
+ */
+struct eeCircRecord {
+  uint8_t wipeFlag = 0xFF;       // Reset/Wipe state indicator
+  uint8_t flag = 0xAA;           // Sync flag (0xAA)
+  uint16_t pageAddress = 0x0000; // Current page pointer
+  uint16_t recordCount = 0;      // Total number of stored records
+};
+
+/**
+ * @brief Global program error states.
+ */
+enum ErrorState {
+  NO_ERROR = 0,
+  BME280_CONNECTION_FAILED = 1,
+  BME280_DATA_ERROR = 2,
+  ATTINY_BYTE_NUM_ERROR = 3,
+  ATTINY_DATA_ERROR = 4,
+  EEPROM_ERROR = 5,
+  WIFI_CONNECTION_ERROR = 6,
+  MQTT_CONNECTION_ERROR = 7,
+  MQTT_LOOP_ERROR = 8,
+  SOIL_SENSOR_ERROR = 9
+};
+
+/**
+ * @brief MQTT ACK management states.
+ */
+enum AckState {
+  NO_ACK = 0, // No ACK: Message ignored or MQTT offline
+  ACK = 1,    // Message received successfully, awaiting more
+  FAILED = 2, // Checksum mismatch, needs retransmission
+  END = 3,    // All messages received, cleanup possible
+  ERROR = 4   // EEPROM internal error
+};
+
+/**
+ * @brief Job directives after background transmissions.
+ */
+enum Eeprom_job {
+  NO_JOB = 0,
+  CONTINUE = 1,      // Continue current transmission
+  UPDATE_EEPROM = 3, // Transmission successful, advance pointer
+  ERASE_EEPROM = 4   // Fatal error, reset memory state
+};
+
+
+
+// ==========================================
+// FILE: /media/progetti_ext/PROJECT/Platformio/finiti/espmeteo/ESPmeteo/src/eeprom.cpp
+// ==========================================
+
+#include "eeprom.h"
+#include "helper.h"
+#include "EEPROMError.h"
+#include <Wire.h>
+
+namespace nEEPROM {
+
+bool writeToEEPROM(uint16_t startAddr, const uint8_t *buffer, uint8_t length) {
+  Wire.beginTransmission(EEPROM_I2C_ADDRESS);
+  Wire.write((uint8_t)(startAddr >> 8));   
+  Wire.write((uint8_t)(startAddr & 0xFF)); 
+
+  for (uint8_t i = 0; i < length; i++)
+    Wire.write(buffer[i]);
+
+  uint8_t check = Wire.endTransmission();
+  delay(100); 
+  if (check != 0) {
+    LOG_ERROR("Error in I2C write!");
+    return false;
+  }
+  return true;
+}
+
+bool readFromEEPROM(uint16_t startAddr, uint8_t *buffer, uint8_t length) {
+  Wire.beginTransmission(EEPROM_I2C_ADDRESS);
+  Wire.write((startAddr >> 8) & 0xFF); 
+  Wire.write(startAddr & 0xFF);        
+  if (Wire.endTransmission() != 0) {
+    return false; 
+  }
+  Wire.requestFrom(static_cast<uint8_t>(EEPROM_I2C_ADDRESS), length);
+  for (uint8_t i = 0; i < length && Wire.available(); i++) {
+    buffer[i] = Wire.read();
+  }
+  return true;
+}
+
+bool readEEPROMDataWithRetry(uint16_t address, uint8_t *buffer, uint8_t length, uint8_t maxRetries) {
+  uint8_t attempts = 0;
+  bool success = false;
+  while (attempts < maxRetries) {
+    if (readFromEEPROM(address, buffer, length)) {
+      success = true;
+      break;
+    }
+    attempts++;
+    delay(100); 
+  }
+  return success;
+}
+
+bool writeEEPROMDataAndVerify(uint16_t address, const uint8_t *buffer, uint8_t length) {
+  writeToEEPROM(address, buffer, length);
+  uint8_t readBuffer[length];
+  readFromEEPROM(address, readBuffer, length);
+
+  for (uint8_t i = 0; i < length; i++) {
+    if (buffer[i] != readBuffer[i]) {
+      ERROR_PRINT(EEPROMError_className, EEPROMError, EEPROMError::FATAL_ERROR);
+      return false;
+    }
+  }
+  LOG_VERBOSE("Data written correctly");
+  helpMet::printHexBuffer(buffer, length);
+  LOG_VERBOSE("Address = 0x%04X", address);
+  return true;
+}
+
+void resetMemory() {
+  const uint16_t nValuesAddr = 0x0000; 
+  const uint8_t defaultValue = 0xDD;   
+  const uint16_t byteToErase = 512;    
+  const int transferSize = 32;         
+
+  LOG_INFO("Resetting memory....");
+
+  for (uint16_t i = 0; i < byteToErase; i += transferSize) { 
+    Wire.beginTransmission(EEPROM_I2C_ADDRESS);
+    Wire.write((uint8_t)((nValuesAddr + i) >> 8)); 
+    Wire.write((uint8_t)((nValuesAddr + i) & 0xFF)); 
+
+    for (uint8_t j = 0; j < transferSize; j++) {
+      Wire.write(defaultValue);
+    }
+
+    uint8_t result = Wire.endTransmission();
+    if (result != 0) {
+      LOG_ERROR("I2C Write Error");
+      return; 
+    }
+    delay(50); 
+  }
+}
+
+} // namespace nEEPROM
+
+
+
+// ==========================================
+// FILE: /media/progetti_ext/PROJECT/Platformio/finiti/espmeteo/ESPmeteo/src/readme.md
+// ==========================================
+
+# ESPmeteo Memory & Logic Management
+
+This document describes the EEPROM storage strategy and the main program logic for the ESP-01 Weather Station.
+
+## EEPROM Storage (24LC32/24LC256)
+The station uses an external I2C EEPROM to store data when an internet connection is unavailable.
+
+- **Geometry**: The memory is managed in 64-byte pages.
+- **Records**: Each weather record is 16 bytes, allowing for 4 records per page.
+- **Circular Buffer**: The last page is reserved for a circular pointer (6 bytes) that tracks the last written address and total record count.
+
+### Data Structures
+
+```cpp
+struct meteoData {
+    int16_t humidityBMP;       // Humidity (fixed point x128)
+    int16_t temperatureBMP;    // Temperature (fixed point x128)
+    int16_t externalPressure;  // Pressure (fixed point x32)
+    uint16_t battery;          // Battery voltage in mV
+    uint8_t counter;           // Record sequence counter
+    uint8_t checksum;          // Data integrity byte
+    uint8_t padding[5];        // Alignment padding
+    uint32_t deviceID;         // Unique device identifier
+};
+
+struct eeCircRecord {
+    uint8_t wipeFlag;          // Debug/Wipe flag
+    uint8_t flag;              // Sync flag (0xAA)
+    uint16_t pageAddress;      // Current page address in EEPROM
+    uint16_t recordCount;      // Number of stored records
+};
+```
+
+## Operation Logic
+
+1. **Initialization**: On boot, the station reads the last page of the EEPROM to recover the state of the circular buffer (`eBuffer`).
+2. **Sensing**: Atmospheric data is sampled from the BME280 sensor, and battery voltage is requested from the ATtiny85 via I2C.
+3. **Connectivity Check**:
+    - The station attempts to connect to WiFi and the MQTT broker.
+4. **Data Transmission**:
+    - **Success**: If connected, it sends the current record. If there are stored records from previous failed attempts, it transmits the entire backlog.
+    - **Failure**: If connection fails, the current record is appended to the EEPROM for future transmission.
+5. **Sleep**: Once the task is complete , the ESP-01 sends a shutdown command (I2C `20`) to the ATtiny85 and enters deep sleep.
+    - The ATtiny85 has a timeout of 15 seconds. If it doesn't receive any I2C communication from the ESP-01 for 15 seconds, it will shut down the ESP-01.
+    - The ESP-01 sends a keep-alive pulse (I2C `21`) to the ATtiny85 every 500ms to reset the timeout counter.
+
+
+// ==========================================
+// FILE: /media/progetti_ext/PROJECT/Platformio/finiti/espmeteo/ESPmeteo/src/circBuff.cpp
+// ==========================================
+
+#include "circBuff.h"
+#include "mqttWifiMessages.h"
+#include "eeprom.h"
+#include "helper.h"
+#include "CIRBUFFError.h"
+#include "EEPROMError.h"
+#include <Wire.h>
+
+EepromDataHandler::EepromDataHandler() {}
+
+/**
+ * @brief Moves the circular record pointer forward and resets count.
+ */
+void EepromDataHandler::forwardCircularRecord(uint16_t freeAddress) {
+  // Invalidiamo il record attuale prima di spostarci
+  circRecord.flag = 0x00; 
+  helpMet::serialize(circRecord, l_buffer);
+  nEEPROM::writeEEPROMDataAndVerify(circRecordAddress, l_buffer, sizeof(eeCircRecord));
+
+  // Spostiamo il puntatore avanti della dimensione della struttura
+  circRecordAddress += sizeof(eeCircRecord);
+
+  if (circRecordAddress > BUFFER_CIRCULAR_END) {
+    circRecordAddress = BUFFER_CIRCULAR_START;
+  }
+
+  circRecord.pageAddress = freeAddress;
+  circRecord.recordCount = 0;
+  circRecord.flag = DEFAULT_FLAG; // Ripristiniamo il flag per il nuovo slot
+
+  helpMet::serialize(circRecord, l_buffer);
+  nEEPROM::writeEEPROMDataAndVerify(circRecordAddress, l_buffer, sizeof(eeCircRecord));
+
+  LOG_INFO("[EEPROM] Puntatore circolare spostato a: 0x%04X (page: 0x%04X, count: 0)", circRecordAddress, circRecord.pageAddress);
+}
+
+/**
+ * @brief Prepares the buffer for transmission by adding record metadata.
+ */
+void EepromDataHandler::prepareBuffer(uint8_t *rawBuffer, uint16_t totalRecordToTransmit) {
+  rawBuffer[TRANSFER_SIZE + 1] = static_cast<uint8_t>(totalRecordToTransmit >> 8);
+  rawBuffer[TRANSFER_SIZE] = static_cast<uint8_t>(totalRecordToTransmit & 0xFF);
+}
+
+/**
+ * @brief Resets the circular record state in EEPROM.
+ */
+bool EepromDataHandler::initializeCircularRecord(uint16_t address) {
+  LOG_INFO("Initializing Circular Buffer...");
+  circRecordAddress = BUFFER_CIRCULAR_START;
+  circRecord.wipeFlag = 0xFF;
+  circRecord.flag = DEFAULT_FLAG;
+  circRecord.recordCount = 0x00;
+  circRecord.pageAddress = 0x0000;
+
+  helpMet::serialize(circRecord, l_buffer);
+  LOG_INFO("[EEPROM] Inizializzazione Record Circolare a: 0x%04X", address);
+
+  return nEEPROM::writeEEPROMDataAndVerify(circRecordAddress, l_buffer, sizeof(eeCircRecord));
+}
+
+/**
+ * @brief Locates the active circular record by searching for the sync flag.
+ */
+bool EepromDataHandler::readLastPageAddressAndRecordCount() {
+  for (circRecordAddress = BUFFER_CIRCULAR_START; circRecordAddress < BUFFER_CIRCULAR_END; circRecordAddress++) {
+    if (!nEEPROM::readEEPROMDataWithRetry(circRecordAddress, l_buffer, sizeof(eeCircRecord))) {
+      LOG_ERROR("Failed to retrieve Circular Record");
+      ERROR_PRINT(CIRBUFFError_className, CIRBUFFError, CIRBUFFError::CIRCREC_NOT_FOUND);
+      return false;
+    }
+
+    helpMet::deserialize(l_buffer, circRecord);
+
+    if (circRecord.flag == DEFAULT_FLAG) {
+#if defined DEBUGMIO
+      LOG_INFO("Sync found at 0x%04X", circRecordAddress);
+#endif
+      return true;
+    }
+    delay(10);
+  }
+
+  LOG_WARN("No sync flag found! Initializing new buffer.");
+  return initializeCircularRecord();
+}
+
+bool EepromDataHandler::initialize(bool resetCircular) {
+  if (resetCircular) {
+    initializeCircularRecord();
+  }
+
+  if (!readLastPageAddressAndRecordCount()) {
+    LOG_ERROR("Circular buffer initialization failed.");
+    ERROR_PRINT(CIRBUFFError_className, CIRBUFFError, CIRBUFFError::CIRCREC_NOT_BUILD);
+    return false;
+  }
+
+  // Check if a wipe was requested (e.g. from a previous session or remote command)
+  if (circRecord.wipeFlag == 0x55) {
+    LOG_ERROR("[SYSTEM] Persistent Wipe Flag detected (0x55). Resetting memory.");
+    return initializeCircularRecord();
+  }
+
+  return true;
+}
+
+bool EepromDataHandler::setWipePending() {
+  circRecord.wipeFlag = 0x55; 
+  helpMet::serialize(circRecord, l_buffer);
+  return nEEPROM::writeEEPROMDataAndVerify(circRecordAddress, l_buffer, sizeof(eeCircRecord));
+}
+
+bool EepromDataHandler::clearWipePending() {
+  circRecord.wipeFlag = 0xFF; 
+  helpMet::serialize(circRecord, l_buffer);
+  return nEEPROM::writeEEPROMDataAndVerify(circRecordAddress, l_buffer, sizeof(eeCircRecord));
+}
+
+uint16_t EepromDataHandler::storedRecords() { return circRecord.recordCount; }
+
+/**
+ * @brief Appends a new weather record to the EEPROM.
+ */
+bool EepromDataHandler::appendRecordToEeprom(meteoData *mData) {
+  LOG_VERBOSE("Storing telemetry record...");
+
+  uint16_t freeAddr = circRecord.pageAddress + (circRecord.recordCount * RECORD_SIZE);
+
+#if defined DEBUGMIO
+  LOG_VERBOSE("Target Address: 0x%04X", freeAddr);
+#endif
+
+  if ((freeAddr + RECORD_SIZE) > BUFFER_CIRCULAR_START) {
+    freeAddr = EEPROM_START_ADDRESS;
+  }
+
+  circRecord.recordCount++;
+  mData->counter = circRecord.recordCount;
+  // Recalculate checksum now that counter has been set
+  mData->checksum = pp_calculateXOR((const uint8_t*)mData, RECORD_SIZE - 1);
+
+  uint8_t recordBuffer[RECORD_SIZE];
+  helpMet::bufferizeData(mData, recordBuffer);
+
+#if defined DEBUGMIO
+  helpMet::printMeteoData(mData);
+  helpMet::printHexBuffer(recordBuffer, RECORD_SIZE);
+#endif
+
+  nEEPROM::writeEEPROMDataAndVerify(freeAddr, recordBuffer, RECORD_SIZE);
+  helpMet::serialize(circRecord, recordBuffer);
+
+  // Update record count in circular pointer block
+  return nEEPROM::writeEEPROMDataAndVerify(circRecordAddress, recordBuffer, BUFFER_SIZE);
+}
+
+/**
+ * @brief Reads all stored records and sends them via MQTT.
+ */
+void EepromDataHandler::readAndSendStoredRecordFromEeprom() {
+  uint8_t rawBuffer[TRANSFER_SIZE + 2];
+  uint16_t totalRecordToTransmit = circRecord.recordCount;
+
+  sprintf(helpMet::str, "Transmitting %u stored records.", totalRecordToTransmit);
+  LOG_VERBOSE("%s", helpMet::str);
+
+  Eeprom_job ejob = NO_JOB;
+
+  for (uint16_t i = 0; i < totalRecordToTransmit; i += MAX_STRUCT) {
+    delay(10);
+    
+    // BUG FIX: Azzeriamo il buffer di trasferimento per evitare che residui di vecchi record
+    // in EEPROM vengano inviati come dati validi nell'ultimo pacchetto (padding).
+    memset(rawBuffer, 0, sizeof(rawBuffer));
+
+    uint16_t recordsToRead = (totalRecordToTransmit - i >= MAX_STRUCT) ? MAX_STRUCT : (totalRecordToTransmit - i);
+    uint16_t bytesToRead = recordsToRead * RECORD_SIZE;
+    uint16_t recordAddress = circRecord.pageAddress + (i * RECORD_SIZE);
+
+    if (recordAddress >= BUFFER_CIRCULAR_START) {
+      recordAddress -= BUFFER_CIRCULAR_START;
+    }
+
+    if (!nEEPROM::readEEPROMDataWithRetry(recordAddress, rawBuffer, bytesToRead)) {
+      LOG_ERROR("EEPROM persistent read error!");
+      ERROR_PRINT(EEPROMError_className, EEPROMError,
+                    EEPROMError::FATAL_ERROR);
+      return;
+    }
+
+    prepareBuffer(rawBuffer, totalRecordToTransmit);
+
+    if (!mqttWifi::sendWithRetry(rawBuffer, sizeof(rawBuffer), ejob)) {
+      if (ejob == ERASE_EEPROM) {
+        ERROR_PRINT(EEPROMError_className, EEPROMError, EEPROMError::FATAL_ERROR);
+        initializeCircularRecord();
+      }
+      return;
+    } else {
+      if (ejob == UPDATE_EEPROM) {
+        ERROR_PRINT(EEPROMError_className, EEPROMError, EEPROMError::SUCCESS);
+        forwardCircularRecord(recordAddress + TRANSFER_SIZE);
+        return; // Sincronizzazione completata e confermata, esci dal ciclo!
+      }
+    }
+
+    // Heartbeat pulse to ATtiny
+    LOG_INFO("[SYSTEM] Transm. block %u: KeepAlive ping to ATtiny sent.", i / MAX_STRUCT + 1);
+    Wire.beginTransmission(SLAVE_ATTINY_ADDRESS);
+    Wire.write(21); 
+    Wire.endTransmission(true);
+    
+    delay(50);
+  }
+
+  delay(50);
+
+  ERROR_PRINT(CIRBUFFError_className, CIRBUFFError, CIRBUFFError::SUCCESS);
+  LOG_INFO("Offline sync completed.");
+}
+
+
+
+// ==========================================
+// FILE: /media/progetti_ext/PROJECT/Platformio/finiti/espmeteo/ESPmeteo/src/CIRBUFFError.h
+// ==========================================
+
+#include "debugutils.h"
+
+#ifndef CIRBUFFERROR_H
+#define CIRBUFFERROR_H
+
+enum class CIRBUFFError {
+    SUCCESS,
+    CIRCREC_NOT_FOUND,
+    CIRCREC_NOT_BUILD
+};
+
+#ifdef DEBUGMIO
+static const char* const CIRBUFFError_messages[] __attribute__((unused)) = {
+    "Transfer OK!",
+    "Error retrieving circRecordAddress.",
+    "Error during circular buffer initialization."
+};
+static const char* const CIRBUFFError_className __attribute__((unused)) = "CIRBUFFError";
+#endif
+
+#endif // CIRBUFFERROR_H
+
+
+
+// ==========================================
+// FILE: /media/progetti_ext/PROJECT/Platformio/finiti/espmeteo/ESPmeteo/src/EspMessages.cpp
+// ==========================================
+
+#include "EspMessages.h"
+#include <log_lib.h>
+#include <mqttWifi.h>
+#include "mqttWifiMessages.h"
+#include "helper.h"
+#include <string.h>
+
+namespace EspMessages {
+
+Eeprom_job processCommand(const char *cmd, EepromDataHandler &eHandler) {
+  if (cmd == nullptr)
+    return NO_JOB;
+
+  if (strcmp(cmd, "wipe") == 0 || strcmp(cmd, "error") == 0) {
+    LOG_ERROR(
+        "[MESSAGES] Reset command received: '%s'. Marking EEPROM for wipe.",
+        cmd);
+    eHandler.setWipePending();
+    return ERASE_EEPROM;
+  }
+
+  if (strcmp(cmd, "end") == 0) {
+    return UPDATE_EEPROM;
+  }
+
+  if (strcmp(cmd, "failed") == 0) {
+    return CONTINUE;
+  }
+
+  return NO_JOB;
+}
+
+bool sendMeteo(meteoData *data, Eeprom_job &job) {
+  uint8_t l_buffer[RECORD_SIZE];
+  helpMet::bufferizeData(data, l_buffer);
+
+  // Delega alla logica di invio con retry (MQTT o ESP-NOW gestiti internamente)
+  return mqttWifi::sendWithRetry(l_buffer, RECORD_SIZE, job);
+}
+
+} // namespace EspMessages
+
+
+
+// ==========================================
+// FILE: /media/progetti_ext/PROJECT/Platformio/finiti/espmeteo/ESPmeteo/src/main.h
+// ==========================================
+
+// main.h
+#ifndef MAIN_H
+#define MAIN_H
+
+#include <Arduino.h>
+#include <ESP8266Ping.h>
+#include <PubSubClient.h>
+#include <SPI.h>
+#include <Wire.h>
+
+// 1. Base definitions and config
+#include "config.h"
+#include "log_lib.h"
+#include "impostazioni.h"
+#include "m_errors.h"
+
+// 2. Utility and Communication
+#include "helper.h"
+#include <mqttWifi.h>
+#include "mqttWifiMessages.h"
+
+// 3. Data Storage and Sensors
+#include "circBuff.h"
+#include "sensors.h"
+#include "eeprom.h"
+
+#endif
+
+
+// ==========================================
+// FILE: /media/progetti_ext/PROJECT/Platformio/finiti/espmeteo/ESPmeteo/src/mqttWifiMessages.h
+// ==========================================
+
+#pragma once
+
+#include <mqttWifi.h> 
+#include "impostazioni.h"
+#include <PacketProtocol.h>
+
+namespace mqttWifi {
+  void setCallback();
+  
+  // High-level transmission for ESPmeteo (uses global publishWithAck)
+  bool sendWithRetry(uint8_t *rawBuffer, size_t bufferSize, Eeprom_job &ejob, PacketType type = TYPE_METEO);
+
+  // MQTT Callback
+  void callback(char *topic, byte *payload, unsigned int length);
+} // namespace mqttWifi
+
+
+
+// ==========================================
+// FILE: /media/progetti_ext/PROJECT/Platformio/finiti/espmeteo/ESPmeteo/src/EspMessages.h
+// ==========================================
+
+#pragma once
+
+#include "impostazioni.h"
+#include <PacketProtocol.h>
+#include "circBuff.h"
+
+/**
+ * @brief Agnostic messaging layer for ESPmeteo.
+ * Handles command processing and data dispatch independently of the transport (MQTT/ESP-NOW).
+ */
+namespace EspMessages {
+
+  /**
+   * @brief Processes a command received from any channel.
+   * @param cmd The command string (e.g. "wipe", "reset").
+   * @param eHandler Reference to the EEPROM handler to set persistent flags.
+   * @return The job directive after processing.
+   */
+  Eeprom_job processCommand(const char* cmd, EepromDataHandler &eHandler);
+
+  /**
+   * @brief High-level function to send data. 
+   * It should be transport-agnostic (tries MQTT and could fall back to others).
+   */
+  bool sendMeteo(meteoData *data, Eeprom_job &job);
+
+} // namespace EspMessages
+
+
+
+// ==========================================
+// FILE: /media/progetti_ext/PROJECT/Platformio/finiti/espmeteo/ESPmeteo/src/circBuff.h
+// ==========================================
+
+/**
+ * @file c_circBuff.h
+ * @brief Circular buffer management for storing weather data in EEPROM.
+ */
+
+#pragma once
+
+#include "impostazioni.h"
+#include <PacketProtocol.h>
+#include <Arduino.h>
+
+// --- EEPROM Geometry Definitions ---
+static const uint16_t EEPROM_START_ADDRESS = 0x0000;
+static const uint16_t EEPROM_PAGE_SIZE = 64;
+
+// --- Circular Buffer Configuration ---
+static const uint16_t BUFFER_SIZE = 6;
+static const uint16_t BUFFER_CIRCULAR_START = 0x7FC0;
+static const uint16_t BUFFER_CIRCULAR_END = (BUFFER_CIRCULAR_START + EEPROM_PAGE_SIZE - BUFFER_SIZE);
+static const uint8_t DEFAULT_FLAG = 0xAA;
+
+// --- Data Record Definitions ---
+static const uint8_t RECORD_SIZE = 16;
+static const uint8_t MAX_STRUCT = 4;
+static const uint16_t TRANSFER_SIZE = (MAX_STRUCT * RECORD_SIZE);
+
+class EepromDataHandler {
+private:
+  uint16_t circRecordAddress;
+  uint8_t l_buffer[64];
+  eeCircRecord circRecord;
+
+  /**
+   * @brief Moves the circular record pointer forward and resets count.
+   */
+  void forwardCircularRecord(uint16_t freeAddress);
+
+  /**
+   * @brief Prepares the buffer for transmission by adding record metadata.
+   */
+  void prepareBuffer(uint8_t *rawBuffer, uint16_t totalRecordToTransmit);
+
+  /**
+   * @brief Resets the circular record state in EEPROM.
+   */
+  bool initializeCircularRecord(uint16_t address = 0);
+
+  /**
+   * @brief Locates the active circular record by searching for the sync flag.
+   */
+  bool readLastPageAddressAndRecordCount();
+
+public:
+  EepromDataHandler();
+
+  /**
+   * @brief Marks the EEPROM for a mandatory reset on next boot or during current init.
+   */
+  bool setWipePending();
+
+  /**
+   * @brief Clears any pending wipe flag.
+   */
+  bool clearWipePending();
+
+  /**
+   * @brief Initializes the handler and discovers the circular buffer state.
+   */
+  bool initialize(bool resetCircular = false);
+
+  uint16_t storedRecords();
+
+  /**
+   * @brief Appends a new weather record to the EEPROM.
+   */
+  bool appendRecordToEeprom(meteoData *mData);
+
+  /**
+   * @brief Reads all stored records and sends them via MQTT.
+   */
+  void readAndSendStoredRecordFromEeprom();
+};
+
+
+// ==========================================
+// FILE: /media/progetti_ext/PROJECT/Platformio/finiti/espmeteo/ESPmeteo/src/m_errors.h
+// ==========================================
+
+#pragma once
+
+#include "EEPROMError.h"
+#include "MQTTError.h"
+#include "WIFIError.h"
+#include "SENSORError.h"
+#include "WIREError.h"
+#include "CIRBUFFError.h"
+
+
+
+// ==========================================
+// FILE: /media/progetti_ext/PROJECT/Platformio/finiti/espmeteo/ESPmeteo/src/main.cpp
+// ==========================================
+
+/**
+ * @file        main.cpp
+ * @project     ESPmeteo - Smart Weather Station
+ * @brief       Collects atmospheric data (BME280) and sends it via MQTT.
+ *              Supports offline logging to EEPROM when WiFi is unavailable.
+ * @author      Sergio
+ * @version     1.3
+ */
+
+#include "main.h"
+#include <SensorManager.h>
+
+// Definizione della variabile di stato per log_lib
+MotivoSpegnimento m_wifi_status = SETUP_OK;
+
+// Array di topics da sottoscrivere
+const char *PROGETTO_TOPICS[] = {
+    nullptr // Terminatore
+};
+uint32_t start_time = 0;
+
+/**
+ * @brief Sends a shutdown command to the ATtiny power manager.
+ */
+void shutDownNow() {
+  LOG_INFO("[SYSTEM] shutting down ...");
+  Serial.flush();
+  delay(100);
+  Wire.beginTransmission(SLAVE_ATTINY_ADDRESS);
+  Wire.write(20); // Command 20: Power down
+  Wire.endTransmission(true);
+  delay(50);
+}
+
+void setup() {
+  start_time = millis();
+  
+  // REGOLA D'ORO: Piccolo delay per stabilizzazione hardware/radio (max 300ms come richiesto)
+  //delay(300);
+
+//#ifdef SerialLog
+  logSerialBegin(38400); 
+  LOG_INFO("--- ESPmeteo START ---");
+//#endif
+
+  Wire.begin(default_sda_pin, default_scl_pin);
+
+  // Inizializzazione Rete (Resilient Star v4.6)
+  mqttWifi::setCallback();
+  m_wifi_status =
+      mqttWifi::setupCompleto(marinerUan, marinerId, PROGETTO_TOPICS, DEV_MARINER_BME280);
+
+#ifdef SerialLog
+  LOG_INFO("Network Setup completato con stato: %d", static_cast<int>(m_wifi_status));
+#endif
+
+  ErrorState check = NO_ERROR;
+  SensorDataHandler sHandler;
+  EepromDataHandler eHandler;
+
+  sHandler.initialize(check);
+
+  if (static_cast<uint8_t>(check) > 0) {
+    helpMet::handleProgramError(check);
+    return;
+  }
+
+  meteoData mdata;
+  eHandler.initialize(false);
+  check = sHandler.getRecord(&mdata);
+
+  if (static_cast<uint8_t>(check) > 0) {
+    helpMet::handleProgramError(check);
+    return;
+  }
+
+  // Se la connessione è fallita (e abbiamo forzato ESP-NOW), salviamo subito in EEPROM
+  if (m_wifi_status != CONN_OK) {
+    LOG_ERROR("[SYSTEM] Connessione fallita, salvataggio in EEPROM e sleep.");
+    eHandler.appendRecordToEeprom(&mdata);
+    shutDownNow();
+    return;
+  }
+
+  uint16_t storedrecords = eHandler.storedRecords();
+
+  if (storedrecords == 0) {
+    // No stored records, send the current one immediately
+    LOG_VERBOSE("Sending single record.");
+    uint8_t l_buffer[RECORD_SIZE];
+    helpMet::bufferizeData(&mdata, l_buffer);
+
+    Eeprom_job ejob = NO_JOB;
+    bool result = mqttWifi::sendWithRetry(l_buffer, RECORD_SIZE, ejob);
+
+    if (result) {
+      // REGOLA ONE-SHOT: Invio proattivo della salute sensori (Tier 4 protocol)
+      // cmdEcho = 0x08 (TYPE_TIME) simula la risposta all'heartbeat
+      uint8_t health = SensorManager::getHealthMask();
+      mqttWifi::sendBinaryAck(DEV_MARINER_BME280, TYPE_TIME, health);
+      LOG_VERBOSE("[SYSTEM] Health ACK inviato (mask: 0x%02X)", health);
+    } else {
+      if (ejob == ERASE_EEPROM) {
+        LOG_ERROR("[MQTT] Errore fatale dal server. Wipe EEPROM.");
+        eHandler.initialize(true); // resetCircular = true
+      } else {
+        eHandler.appendRecordToEeprom(&mdata);
+        LOG_VERBOSE("Transmission failed, stored in EEPROM.");
+      }
+    }
+  } else {
+    // Multiple records stored, send everything in a block
+    LOG_VERBOSE("Sending block of stored records...");
+    eHandler.appendRecordToEeprom(&mdata);
+    delay(100);
+    eHandler.readAndSendStoredRecordFromEeprom();
+    
+    // REGOLA ONE-SHOT: Invio proattivo della salute sensori dopo lo scarico buffer
+    uint8_t health = SensorManager::getHealthMask();
+    mqttWifi::sendBinaryAck(DEV_MARINER_BME280, TYPE_TIME, health);
+    LOG_INFO("[SYSTEM] Health ACK inviato dopo buffer (mask: 0x%02X)", health);
+  }
+}
+
+void loop() {
+  LOG_INFO("[SYSTEM] Ciclo completato.");
+
+  // Nota:elapsed time viene loggato qui prima di spegnere l'alimentazione
+  LOG_INFO("[SYSTEM] TAGLIO ALIMENTAZIONE -> SHUTDOWN ATTINY");
+  unsigned long elapsed_ms = millis() - start_time;
+  unsigned long elapsed_s = elapsed_ms / 1000;
+  unsigned long elapsed_d = (elapsed_ms % 1000) / 100; // decimi
+  LOG_INFO("[SYSTEM] Tempo trascorso dall'avvio: %lu.%lu secondi", elapsed_s,
+           elapsed_d);
+  Serial.flush();
+  delay(100);
+  Wire.beginTransmission(SLAVE_ATTINY_ADDRESS);
+  Wire.write(20); // Command 20: Power down
+  Wire.endTransmission(true);
+  // Spin infinito: l'ATtiny taglierà l'alimentazione in pochi ms.
+  // Senza questo, il framework Arduino chiamerebbe loop() una seconda volta
+  // sprecando ~3 secondi di batteria prima del taglio.
+  while (true) {
+    delay(100);
+  }
+}
+
+
+
+// ==========================================
+// FILE: /media/progetti_ext/PROJECT/Platformio/finiti/espmeteo/ESPmeteo/src/WIREError.h
+// ==========================================
+
+#include "debugutils.h"
+
+#ifndef WIREERROR_H
+#define WIREERROR_H
+
+enum class WIREError {
+    SUCCESS,
+    BYTE_NUM_ERROR,
+    DATA_ERROR
+};
+
+#ifdef DEBUGMIO
+static const char* const WIREError_messages[] __attribute__((unused)) = {
+    "Transfer OK!",
+    "Requested byte count mismatch.",
+    "Incomplete data received."
+};
+static const char* const WIREError_className __attribute__((unused)) = "WIREError";
+#endif
+
+#endif // WIREERROR_H
+
+
+
+// ==========================================
+// FILE: /media/progetti_ext/PROJECT/Platformio/finiti/espmeteo/ESPmeteo/src/mqttWifiMessages.cpp
+// ==========================================
+
+#include "mqttWifiMessages.h"
+#include <Arduino.h>
+#include <topic.h>
+#include <log_lib.h>
+#include <mqttWifi.h>
+#include <PacketProtocol.h>
+
+namespace mqttWifi {
+
+  void setCallback() {
+    client.setCallback(callback);
+  }
+
+  void callback(char *topic, byte *payload, unsigned int length) {
+    if (strcmp(topic, espNowBridgeAck) == 0) {
+      handleAckPacket(payload, length);
+    }
+  }
+
+  bool sendWithRetry(uint8_t *rawBuffer, size_t bufferSize, Eeprom_job &ejob, PacketType type) {
+    uint8_t outBuffer[bufferSize + HEADER_SIZE + 1]; 
+    size_t frameSize = pp_buildPacket(static_cast<uint8_t>(type), rawBuffer, bufferSize, outBuffer);
+    
+    if (frameSize == 0) {
+      LOG_ERROR("[SEND] Errore critico in buildPacket!");
+      return false;
+    }
+    
+    LOG_INFO("[SEND] Inviando frame 0x%02X (%d byte)...", (uint8_t)type, frameSize);
+    
+    // USIAMO LA FUNZIONE GLOBALE (Topic agnostico, ACK binario)
+    // Usiamo espNowBridgeBuffer come topic di destinazione universale
+    AckState res = publishWithAck(espNowBridgeBuffer, outBuffer, frameSize, 1, 5000); 
+
+    // Mappatura degli stati per la logica EEPROM della sonda
+    if (res == ACK) {
+        LOG_VERBOSE("[ACK] Ricevuto -> Continua sync");
+        ejob = NO_JOB; 
+        return true;
+    } else if (res == END) {
+        LOG_INFO("[ACK] Ricevuto FINE -> Sync completato");
+        ejob = UPDATE_EEPROM; 
+        return true;
+    } else if (res == FAILED) {
+        LOG_WARN("[ACK] NACK dal server (Cloud offline o errore). Dato conservato.");
+        ejob = NO_JOB; 
+        return false;
+    } else if (res == ERROR) {
+        LOG_ERROR("[ACK] Errore critico richiesto dal server!");
+        ejob = ERASE_EEPROM;
+        return false;
+    }
+    
+    // Timeout o nessun ACK
+    LOG_ERROR("[ACK] Timeout attesa risposta");
+    ejob = NO_JOB;
+    return false;
+  }
+
+} // namespace mqttWifi
+
+
+
+// ==========================================
+// FILE: /media/progetti_ext/PROJECT/Platformio/finiti/espmeteo/ESPmeteo/src/sensors.cpp
+// ==========================================
+
+#include "sensors.h"
+#include "debugutils.h"
+#include <Arduino.h>
+#include <log_lib.h>
+#include <shared_config.h>
+SystemState stato; // Global system state for health monitoring
+/**
+ * @brief Constructor for SensorDataHandler.
+ */
+SensorDataHandler::SensorDataHandler()
+    : settings(BME280::OSR_X1, BME280::OSR_X1, BME280::OSR_X1,
+               BME280::Mode_Forced, BME280::StandbyTime_1000ms,
+               BME280::Filter_Off, BME280::SpiEnable_False),
+      bme(settings) {}
+
+/**
+ * @brief Initializes the sensor suite.
+ */
+void SensorDataHandler::initialize(ErrorState &error) {
+  uint32_t startTime = millis();
+  while (!bme.begin()) {
+    if (millis() - startTime > 3000) {
+      LOG_WARN("[SENSORS] BME280 sensor not responding at initialization.");
+      bmePresent = false;
+      goto skipBme;
+    }
+    delay(400);
+  }
+  bmePresent = true;
+
+skipBme:
+
+  currmet.deviceID = DEV_MARINER_BME280;
+  currmet.battery = 0;
+  currmet.checksum = 0;
+  currmet.counter = 0;
+  currmet.externalPressure = 0;
+  currmet.humidityBMP = 0;
+  currmet.temperatureBMP = 0;
+  currmet.moisture = 0;
+  // Initialize padding
+  for(int i=0; i<3; i++) currmet.padding[i] = 0;
+
+  error = NO_ERROR;
+}
+
+/**
+ * @brief Calculates a simple checksum for the data packet.
+ * Keep existing logic for backward compatibility if needed, though XOR is in PacketProtocol.
+ */
+void SensorDataHandler::calculateChecksum() {
+  // Calcola lo XOR su tutti i byte della struct escluso l'ultimo (il checksum stesso)
+  currmet.checksum = pp_calculateXOR((const uint8_t*)&currmet, sizeof(meteoData) - 1);
+}
+
+/**
+ * @brief Request battery voltage from ATtiny via I2C.
+ */
+ErrorState SensorDataHandler::requestDataFromAttiny() {
+  uint8_t bytesRead = 0;
+  uint8_t dati[4] = {0};
+
+  if (Wire.requestFrom(SLAVE_ATTINY_ADDRESS, 4) != 4) {
+    ERROR_PRINT(WIREError_className, WIREError, WIREError::BYTE_NUM_ERROR);
+    return ATTINY_BYTE_NUM_ERROR;
+  }
+
+  while (Wire.available() && bytesRead < 4) {
+    dati[bytesRead++] = Wire.read();
+  }
+
+  if (bytesRead != 4) {
+    ERROR_PRINT(WIREError_className, WIREError, WIREError::DATA_ERROR);
+    return ATTINY_DATA_ERROR;
+  }
+
+  // Byte 0-1: Battery Voltage
+  currmet.battery = (dati[1] << 8) | dati[0];
+
+  // Byte 2-3: Moisture raw ADC value
+  currmet.moisture = (dati[3] << 8) | dati[2];
+
+  // Check for invalid moisture reading (often 0xFFFF when sensor not found/broken)
+  if (currmet.moisture == 0xFFFF) {
+    LOG_WARN("[SENSORS] Soil Moisture sensor not found or returning 0xFFFF.");
+    currmet.moisture = 0; // Set to 0 to avoid sending 65535
+    soilPresent = false;
+  } else {
+    soilPresent = true;
+  }
+
+  LOG_INFO("[SENSORS] Bat: %u mV, Soil: %u (Present: %s)", 
+           currmet.battery, currmet.moisture, soilPresent ? "YES" : "NO");
+
+  return NO_ERROR;
+}
+
+/**
+ * @brief Reads data from the BME280 sensor and encodes it using PacketProtocol macros.
+ */
+ErrorState SensorDataHandler::readFromBME280() {
+  if (!bmePresent) return BME280_CONNECTION_FAILED;
+
+  float temp = NAN, hum = NAN, pres = NAN;
+
+  bme.read(pres, temp, hum);
+  delay(200);
+  bme.read(pres, temp, hum);
+  delay(200);
+
+  if (isnan(temp) || isnan(hum) || isnan(pres)) {
+    LOG_ERROR("[SENSORS] Failed to read valid data from BME280.");
+    return BME280_DATA_ERROR;
+  }
+
+  // Encoding using PacketProtocol defines for consistency
+  currmet.humidityBMP = PP_ENCODE_HUM(hum);
+  currmet.temperatureBMP = PP_ENCODE_TEMP(temp);
+  currmet.externalPressure = PP_ENCODE_PRESS(pres);
+
+  return NO_ERROR;
+}
+
+/**
+ * @brief Populates the provided structure with fresh sensor data.
+ */
+ErrorState SensorDataHandler::getRecord(meteoData *mdata) {
+  ErrorState errBME = NO_ERROR;
+  ErrorState errAttiny = NO_ERROR;
+  int retryCount = 1;
+
+  // Try BME280 if potentially present
+  if (bmePresent) {
+    while (retryCount > 0) {
+      errBME = readFromBME280();
+      if (errBME == NO_ERROR) break;
+      retryCount--;
+      delay(1000);
+    }
+    if (errBME != NO_ERROR) {
+      LOG_WARN("[SENSORS] BME280 data currently unavailable.");
+      currmet.temperatureBMP = 0;
+      currmet.humidityBMP = 0;
+      currmet.externalPressure = 0;
+    }
+  }
+
+  // Always try ATtiny (Battery and Soil)
+  errAttiny = requestDataFromAttiny();
+  if (errAttiny != NO_ERROR && !bmePresent) {
+    LOG_ERROR("[SENSORS] ATtiny Error and BME not present. System unusable.");
+    return errAttiny;
+  }
+
+  // Final check: do we have at least one valid source?
+  // We consider it OK if BME is working OR Soil is working OR at least we have Battery.
+  // The user says: "if BME or Soil is present"
+  if (!bmePresent && !soilPresent) {
+    LOG_ERROR("[SENSORS] No sensors found (BME and Soil missing). Stopping.");
+    return BME280_CONNECTION_FAILED; // Returning a generic error to stop transmission
+  }
+
+  calculateChecksum();
+  
+  // Aggiornamento stato di salute per SensorManager / Health Monitoring
+  stato.sensor_alive[0] = (bmePresent && errBME == NO_ERROR);
+  stato.sensor_alive[1] = soilPresent;
+
+  LOG_INFO("[SENSORS] Sensor suite status: BME:%s, Soil:%s. Sending data.", 
+           stato.sensor_alive[0] ? "OK" : "ERR", 
+           stato.sensor_alive[1] ? "OK" : "ERR");
+
+  *mdata = currmet;
+  return NO_ERROR;
+}
+
+
+
+
+// ==========================================
+// FILE: /media/progetti_ext/PROJECT/Platformio/finiti/espmeteo/ESPmeteo/src/EEPROMError.h
+// ==========================================
+
+#include "debugutils.h"
+
+#ifndef EEPROMERROR_H
+#define EEPROMERROR_H
+
+enum class EEPROMError {
+    SUCCESS,
+    FATAL_ERROR,
+    OUT_OF_RANGE,
+    EE_FULL,
+    I2C_TRANSMISSION_FAILED
+};
+
+#ifdef DEBUGMIO
+static const char* const EEPROMError_messages[] __attribute__((unused)) = {
+    "Operation completed successfully.",
+    "Persistent error reading data from EEPROM!",
+    "Address out of range.",
+    "Error: EEPROM data memory full!",
+    "I2C transmission error."
+};
+static const char* const EEPROMError_className __attribute__((unused)) = "EEPROMError";
+#endif
+
+#endif // EEPROMERROR_H
+
+
+
+// ==========================================
+// FILE: /media/progetti_ext/PROJECT/Platformio/finiti/espmeteo/ESPmeteo/src/helper.h
+// ==========================================
+
+/**
+ * @file helper.h
+ * @brief Utility functions for serialization, logging, and error handling.
+ */
+
+#pragma once
+
+#include "impostazioni.h"
+#include <Arduino.h>
+#include <PacketProtocol.h>
+
+namespace helpMet {
+  /**
+   * @brief Serializes a structure into a byte buffer.
+   */
+  template <typename T> size_t serialize(const T &data, uint8_t *buffer) {
+    memcpy(buffer, &data, sizeof(T));
+    return sizeof(T);
+  }
+
+  /**
+   * @brief Deserializes a byte buffer into a structure.
+   */
+  template <typename T> void deserialize(const uint8_t *buffer, T &data) {
+    memcpy(&data, buffer, sizeof(T));
+  }
+
+  extern char str[256]; 
+
+  void bufferizeData(meteoData *mData, uint8_t *l_buffer);
+  void blinkLed(uint8_t count, bool fast = false);
+  void printBufferLog(eeCircRecord eBuffer);
+  void printCurmetLog(eeCircRecord eBuffer);
+  void printMeteoData(meteoData *mData);
+  void printHexBuffer(const uint8_t *buffer, size_t length);
+  void handleProgramError(ErrorState &error);
+} // namespace helpMet
+
+
+// ==========================================
+// FILE: /media/progetti_ext/PROJECT/Platformio/finiti/espmeteo/ESPmeteo/src/sensors.h
+// ==========================================
+
+/**
+ * @file c_sensors.h
+ * @brief Sensor data handling for BME280 and battery monitoring via ATtiny.
+ */
+
+#pragma once
+
+#include <BME280I2C.h>
+#include <Wire.h>
+#include "impostazioni.h"
+#include <PacketProtocol.h>
+
+class SensorDataHandler {
+private:
+  BME280I2C::Settings settings;
+  BME280I2C bme;
+  meteoData currmet;
+  bool bmePresent = false;
+  bool soilPresent = false;
+
+  /**
+   * @brief Calculates a simple checksum for the data packet.
+   */
+  void calculateChecksum();
+
+  /**
+   * @brief Request battery voltage and soil moisture from ATtiny via I2C.
+   */
+  ErrorState requestDataFromAttiny();
+
+  /**
+   * @brief Reads data from the BME280 sensor.
+   */
+  ErrorState readFromBME280();
+
+public:
+  SensorDataHandler();
+
+  void initialize(ErrorState &error);
+
+  /**
+   * @brief Populates the provided structure with fresh sensor data.
+   */
+  ErrorState getRecord(meteoData *mdata);
+
+  /**
+   * @brief Generates a dummy record for testing.
+   */
+  ErrorState getDummyRecord(meteoData *mdata);
+};
+
+
+
+// ==========================================
+// FILE: /media/progetti_ext/PROJECT/Platformio/finiti/espmeteo/ESPmeteo/src/helper.cpp
+// ==========================================
+
+#include "helper.h"
+#include <mqttWifi.h> 
+#include <topic.h>
+#include <Arduino.h>
+
+namespace helpMet {
+
+char str[256];
+
+/**
+ * @brief Custom bufferization for meteoData to ensure specific field alignment.
+ */
+void bufferizeData(meteoData *mData, uint8_t *l_buffer) {
+  int offset = 0;
+
+  memcpy(l_buffer + offset, &mData->deviceID, sizeof(mData->deviceID));
+  offset += sizeof(mData->deviceID);
+
+  memcpy(l_buffer + offset, &mData->humidityBMP, sizeof(mData->humidityBMP));
+  offset += sizeof(mData->humidityBMP);
+
+  memcpy(l_buffer + offset, &mData->temperatureBMP,
+         sizeof(mData->temperatureBMP));
+  offset += sizeof(mData->temperatureBMP);
+
+  memcpy(l_buffer + offset, &mData->externalPressure,
+         sizeof(mData->externalPressure));
+  offset += sizeof(mData->externalPressure);
+
+  memcpy(l_buffer + offset, &mData->battery, sizeof(mData->battery));
+  offset += sizeof(mData->battery);
+
+  memcpy(l_buffer + offset, &mData->moisture, sizeof(mData->moisture));
+  offset += sizeof(mData->moisture);
+
+  uint8_t padding[3] = {0};
+  memcpy(l_buffer + offset, padding, sizeof(padding));
+  offset += sizeof(padding);
+
+  memcpy(l_buffer + offset, &mData->counter, sizeof(mData->counter));
+  offset += sizeof(mData->counter);
+
+  memcpy(l_buffer + offset, &mData->checksum, sizeof(mData->checksum));
+}
+
+/**
+ * @brief Reusable LED blinker for status signaling.
+ */
+void blinkLed(uint8_t count, bool fast) {
+  uint16_t delayMs = fast ? 250 : 500;
+  for (uint8_t i = 0; i < count; i++) {
+    digitalWrite(LED_BUILTIN, LOW);
+    delay(delayMs);
+    digitalWrite(LED_BUILTIN, HIGH);
+    delay(delayMs);
+  }
+}
+
+void printBufferLog(eeCircRecord eBuffer) {
+#ifdef DEBUGMIO
+  sprintf(str, "Buffer - Wipe: 0x%02X, Flag: 0x%02X, Addr: %u, Count: %u",
+          eBuffer.wipeFlag, eBuffer.flag, eBuffer.pageAddress,
+          eBuffer.recordCount);
+  LOG_VERBOSE("%s", str);
+  mqttWifi::publish(logTopic, str);
+#endif
+}
+
+void printCurmetLog(eeCircRecord eBuffer) {
+#ifdef DEBUGMIO
+  sprintf(str, "Telemetry - Wipe: 0x%02X, Flag: 0x%02X, Addr: %u, Count: %u",
+          eBuffer.wipeFlag, eBuffer.flag, eBuffer.pageAddress,
+          eBuffer.recordCount);
+
+  mqttWifi::publish(logMeteoTopic, str);
+  LOG_VERBOSE("%s", str);
+  delay(10);
+#endif
+}
+
+void printMeteoData(meteoData *mData) {
+#ifdef DEBUGMIO
+  LOG_VERBOSE("MeteoData - Hum: %d, Temp: %d, Pres: %d, Batt: %u, Soil: %u, Cnt: %u, Check: %u",
+                mData->humidityBMP, mData->temperatureBMP,
+                mData->externalPressure, mData->battery, mData->moisture,
+                mData->counter, mData->checksum);
+#endif
+}
+
+void printHexBuffer(const uint8_t *buffer, size_t length) {
+#ifdef DEBUGMIO
+  String out = "";
+  for (size_t i = 0; i < length; i++) {
+    char hex[6];
+    sprintf(hex, "0x%02X ", buffer[i]);
+    out += hex;
+  }
+  LOG_VERBOSE("Buffer: %s", out.c_str());
+#endif
+}
+
+/**
+ * @brief Centralized error handler logic.
+ */
+void handleProgramError(ErrorState &error) {
+#ifdef DEBUGMIO
+  switch (error) {
+  case BME280_CONNECTION_FAILED:
+    LOG_ERROR("[SYSTEM] BME280 sensor NOT found or connection failed.");
+    break;
+  case BME280_DATA_ERROR:
+    LOG_ERROR("[SYSTEM] BME280 sensor returned invalid data (NaN).");
+    break;
+  case ATTINY_BYTE_NUM_ERROR:
+    LOG_ERROR("[SYSTEM] ATtiny I2C communication error (byte count mismatch).");
+    break;
+  case ATTINY_DATA_ERROR:
+    LOG_ERROR("[SYSTEM] ATtiny sent incomplete or corrupted data.");
+    break;
+  case EEPROM_ERROR:
+    LOG_ERROR("[SYSTEM] EEPROM read/write operation failed.");
+    break;
+  case WIFI_CONNECTION_ERROR:
+    LOG_ERROR("[SYSTEM] WiFi connection could not be established.");
+    break;
+  case MQTT_CONNECTION_ERROR:
+    LOG_ERROR("[SYSTEM] MQTT broker connection failed.");
+    break;
+  case SOIL_SENSOR_ERROR:
+    LOG_ERROR("[SYSTEM] Soil Moisture sensor (via ATtiny) returned error code (0xFFFF).");
+    break;
+  case NO_ERROR:
+    LOG_INFO("[SYSTEM] System state: OK.");
+    break;
+  default:
+    LOG_ERROR("[SYSTEM] An unknown error state occurred: %d", static_cast<int>(error));
+    break;
+  }
+#else
+  blinkLed(static_cast<uint8_t>(error), true);
+#endif
+}
+
+} // namespace helpMet
+
+

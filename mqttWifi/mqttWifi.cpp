@@ -13,8 +13,8 @@ namespace mqttWifi {
 
 // Variabili globali per il trasporto (accessibili da protocol.cpp tramite
 // extern)
-IMqttTransport *mqttTransport = nullptr;
-MqttTransportType currentTransport = DEFAULT_MQTT_TRANSPORT;
+INetworkTransport *networkTransport = nullptr;
+NetworkTransportType currentTransport = DEFAULT_NETWORK_TRANSPORT;
 
 PubSubClient client(c_mqtt);
 volatile AckState ackStatus = NO_ACK;
@@ -22,18 +22,18 @@ volatile uint8_t expectedAckDeviceID = 0x00;
 
 void setAckStatus(AckState s) { ackStatus = s; }
 
-void setMqttTransport(MqttTransportType t) {
-  if (mqttTransport) {
-    mqttTransport->disconnect();
-    delete mqttTransport;
+void setNetworkTransport(NetworkTransportType t) {
+  if (networkTransport) {
+    networkTransport->disconnect();
+    delete networkTransport;
   }
   currentTransport = t;
-  mqttTransport = createMqttTransport(t);
-  if (mqttTransport)
-    mqttTransport->init();
+  networkTransport = createNetworkTransport(t);
+  if (networkTransport)
+    networkTransport->init();
 }
 
-MqttTransportType getMqttTransport() { return currentTransport; }
+NetworkTransportType getNetworkTransport() { return currentTransport; }
 
 // ========== CONFIGURAZIONE ==========
 const uint8_t MAX_TENTATIVI = 3;
@@ -50,7 +50,7 @@ const char **m_topics = nullptr;
 
 // ========== GESTIONE PUBBLICAZIONE ==========
 bool publish(const char *topic, const char *message, bool retained) {
-  if (getMqttTransport() == MqttTransportType::ESPNOW) {
+  if (getNetworkTransport() == NetworkTransportType::ESPNOW) {
     LOG_WARN("[PUBLISH] Stringa raw non consigliata in ESP-NOW. Usa binario.");
     return false;
   }
@@ -69,7 +69,7 @@ bool publish(const char *topic, const char *message, bool retained) {
 
 bool publish(const char *topic, const uint8_t *payload, size_t length,
              bool retained) {
-  if (getMqttTransport() == MqttTransportType::ESPNOW) {
+  if (getNetworkTransport() == NetworkTransportType::ESPNOW) {
     // --- LOGICA DI ROUTING (Resilient Star v4) ---
     // 1. I comandi e il tempo sono preferibilmente UNICAST (più affidabili)
     uint8_t type = (length >= 3) ? payload[2] : 0xFF;
@@ -80,7 +80,7 @@ bool publish(const char *topic, const uint8_t *payload, size_t length,
       if (!g_gateway_mac_trovato || !g_gateway_paired) {
         LOG_INFO("[PUBLISH] Handshake mode: invio BROADCAST (type: 0x%02X)",
                  type);
-        return mqttTransport->sendBroadcast(payload, length);
+        return networkTransport->sendBroadcast(payload, length);
       }
 
       // Se siamo accoppiati, usiamo l'Unicast efficiente
@@ -89,18 +89,18 @@ bool publish(const char *topic, const uint8_t *payload, size_t length,
           g_real_gateway_mac[0], g_real_gateway_mac[1], g_real_gateway_mac[2],
           g_real_gateway_mac[3], g_real_gateway_mac[4], g_real_gateway_mac[5]);
 
-      if (mqttTransport->send(payload, length))
+      if (networkTransport->send(payload, length))
         return true;
 
       // Se l'Unicast fallisce a livello radio, perdiamo l'accoppiamento e proviamo broadcast
       LOG_WARN("[PUBLISH] Unicast fallito (radio), reset pairing e riprovo broadcast...");
       g_gateway_paired = false; 
-      return mqttTransport->sendBroadcast(payload, length);
+      return networkTransport->sendBroadcast(payload, length);
     }
 
     // 2. Gli ACK e la TELEMETRIA sono sempre BROADCAST (tutti devono sentire)
     // Questo risolve la contraddizione segnalata nel file bugs_to_solve.txt
-    return mqttTransport->sendBroadcast(payload, length);
+    return networkTransport->sendBroadcast(payload, length);
   } // <--- CHIUDE IL RAMO ESPNOW
 
   // RAMO MQTT/WiFi
@@ -153,11 +153,11 @@ void logMotivoSpegnimento(MotivoSpegnimento motivo) {
 void adessoDormo(uint8_t mode, MotivoSpegnimento motivo) {
   logMotivoSpegnimento(motivo);
 
-  if (getMqttTransport() != MqttTransportType::ESPNOW && client.connected()) {
+  if (getNetworkTransport() != NetworkTransportType::ESPNOW && client.connected()) {
     client.disconnect();
   }
 
-  if (getMqttTransport() != MqttTransportType::ESPNOW) {
+  if (getNetworkTransport() != NetworkTransportType::ESPNOW) {
     WiFi.disconnect(true);
     WiFi.mode(WIFI_OFF);
   }
@@ -268,18 +268,27 @@ bool sottoscriviTopics(const char *progetto_topics[]) {
 }
 
 MotivoSpegnimento gestisciConnessione() {
-  if (getMqttTransport() == MqttTransportType::ESPNOW) {
-    if (mqttTransport && mqttTransport->connect()) {
-      mqttTransport->keepAlive();
+  if (getNetworkTransport() == NetworkTransportType::ESPNOW) {
+    if (networkTransport && networkTransport->connect()) {
+      networkTransport->keepAlive();
       return CONN_OK;
     }
+#ifndef FORCE_ESPNOW
     // ESP-NOW connect() fallito: cleanup PRIMA di switchare a WiFi
     LOG_WARN("[CONN] ESP-NOW fallito, switch a WiFi con cleanup");
-    if (mqttTransport) {
-      mqttTransport->disconnect();
+    if (networkTransport) {
+      networkTransport->disconnect();
     }
-    setMqttTransport(MqttTransportType::WIFI);
+    setNetworkTransport(NetworkTransportType::WIFI_MQTT);
+    
+    // Forza disconnessione per pulire lo stato radio (fondamentale su ESP8266)
+    WiFi.disconnect(true); 
+    delay(100);
     setupWifi();
+#else
+    LOG_ERROR("[CONN] ESP-NOW fallito. Fallback WiFi DISABILITATO (FORCE_ESPNOW).");
+    return CONN_FALLITO; 
+#endif
   }
 
   if (WiFi.status() != WL_CONNECTED) {
@@ -304,10 +313,10 @@ void loop() {
   // Watchdog Resilienza: controlla il heartbeat TIME dal gateway
   if (lastTimeSynced != 0 && (now - lastTimeSynced > SYNC_TIMEOUT)) {
     LOG_WARN("[WATCHDOG] Heartbeat TIME perso da %lu ms!",
-             (now - lastTimeSynced));
+             (unsigned long)(now - lastTimeSynced));
 
-    if (getMqttTransport() == MqttTransportType::ESPNOW) {
-      setMqttTransport(MqttTransportType::WIFI);
+    if (getNetworkTransport() == NetworkTransportType::ESPNOW) {
+      setNetworkTransport(NetworkTransportType::WIFI_MQTT);
       setupWifi();
       if (connectWifi() && connectMqtt()) {
         lastTimeSynced = now;
@@ -325,7 +334,7 @@ void loop() {
     }
   }
 
-  if (getMqttTransport() == MqttTransportType::ESPNOW) {
+  if (getNetworkTransport() == NetworkTransportType::ESPNOW) {
     uint8_t rxBuf[250];
     int rxLen;
     // Svuota TUTTA la FIFO ad ogni ciclo per evitare overrun in caso di burst
@@ -340,13 +349,13 @@ void loop() {
 __attribute__((weak)) void setCallback() {}
 
 int receive(uint8_t *buffer, size_t buflen) {
-  return mqttTransport ? mqttTransport->receive(buffer, buflen) : 0;
+  return networkTransport ? networkTransport->receive(buffer, buflen) : 0;
 }
 
 // ========== AGGIORNAMENTO FIRMWARE ==========
 void checkForUpdates() {
   LOG_INFO("[UPDATE] Controllo aggiornamenti...");
-  bool wasEspNow = (getMqttTransport() == MqttTransportType::ESPNOW);
+  bool wasEspNow = (getNetworkTransport() == NetworkTransportType::ESPNOW);
 
   if (wasEspNow) {
     setupWifi();
@@ -366,7 +375,7 @@ void checkForUpdates() {
   }
 
   if (wasEspNow)
-    setMqttTransport(MqttTransportType::ESPNOW);
+    setNetworkTransport(NetworkTransportType::ESPNOW);
 }
 MotivoSpegnimento setupCompleto(IPAddress ip, const char *mqtt_id,
                                 const char *progetto_topics[],
@@ -381,17 +390,21 @@ MotivoSpegnimento setupCompleto(IPAddress ip, const char *mqtt_id,
   // connessione al router. Se il gateway non risponde, passeremo a WiFi.
 #ifdef ESP32_MQTT
   // Il Gateway (Bridge) parla ovviamente MQTT/WiFi direttamente dal broker
-  setMqttTransport(MqttTransportType::WIFI);
+  setNetworkTransport(NetworkTransportType::WIFI_MQTT);
 #else
-  setMqttTransport(MqttTransportType::ESPNOW);
+  setNetworkTransport(NetworkTransportType::ESPNOW);
 #endif
 
   // Inizializza il trasporto scelto
-  if (getMqttTransport() == MqttTransportType::ESPNOW) {
-    if (mqttTransport && !mqttTransport->connect()) {
+  if (getNetworkTransport() == NetworkTransportType::ESPNOW) {
+    if (networkTransport && !networkTransport->connect()) {
+#ifndef FORCE_ESPNOW
       LOG_WARN("[SETUP] Gateway ESP-NOW non trovato. Fallback a WiFi...");
-      setMqttTransport(MqttTransportType::WIFI);
+      setNetworkTransport(NetworkTransportType::WIFI_MQTT);
       setupWifi();
+#else
+      LOG_ERROR("[SETUP] Gateway ESP-NOW non trovato. Fallback DISABILITATO.");
+#endif
     }
   } else {
     setupWifi();

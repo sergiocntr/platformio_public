@@ -43,6 +43,7 @@
  * ESP8266      │ PZEM – quadro elettrico                │ │ 0x50   │
  * DEV_CAMINETTO         │ Salotto      │ ESP8266      │ DS18 + Sonda K + Fan
  * PID (caminettoData)│ │ 0x70   │ DEV_ESP_CAMERA        │ Camera pic.  │
+ * ESP32C3      │ riservato per sensori umidita' suolo -piante │ │ 0x80-0xAF │
  * ESP8266      │ Termocoppia K – sul dispositivo        │ │ 0xD0   │
  * DEV_MARINER_BME280    │ Esterno      │ ESP01        │ BME280 – weather
  * station               │ │ 0xE0   │ DEV_CALDAIA_DS18B20   │ Esterno      │
@@ -74,6 +75,7 @@
   0x50 // Salotto – ESP8266 – DS18B20 caminetto -Termocoppia K - Pid ventola →
        // struct caminettoData
 #define DEV_ESP_CAMERA 0x70 // Camera piccola – ESP8266
+//Attenzione : indirizzi fra 0x80 e 0x9F riservati per sensori piante
 #define DEV_MARINER_BME280                                                     \
   0xD0 // Esterno – ESP01 – BME280 weather station → struct meteoData
 #define DEV_CALDAIA_DS18B20                                                    \
@@ -84,5 +86,6 @@
 #define DEV_ESP_NOW_GATEWAY 0xFE // ESP NOW gateway
 #define DEV_MASTER 0xFF  // Node-RED Master / Broadcast ID
 #define DEV_UNKNOWN 0xFF // Alias for compatibility
+
 
 #endif // DEVICES_H

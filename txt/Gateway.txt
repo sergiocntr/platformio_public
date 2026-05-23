@@ -1,0 +1,1216 @@
+
+// ==========================================
+// FILE: /media/progetti_ext/PROJECT/Platformio/EspNowGateway/changelog.md
+// ==========================================
+
+# Changelog - ESPNOWGATEWAY
+## [2026-05-25] 1.2.0
+### Fixed
+- Gateway sent animmediate fake “ack” to the sensor (without waiting for backend ACK) and published the data to espNowBridgeBuffer, which backend wasn't listening to → the ESP-NOW data never reached the backend.
+- Gateway now saves the sender's MAC address and forwards the actual ACK from backend via ESP-NOW
+
+
+
+
+
+// ==========================================
+// FILE: /media/progetti_ext/PROJECT/Platformio/EspNowGateway/src/node_report.cpp
+// ==========================================
+
+/**
+ * @file node_report.cpp
+ * @brief Generazione report nodi — formato stringa (JSON) e binario
+ */
+
+#include "node_report.h"
+#include "node_table.h"
+
+#include <Arduino.h>
+#include <WiFi.h>
+#include <log_lib.h>
+#include <mqttWifi.h>
+#include <shared_config.h>
+#include <topic.h>
+
+/* ========================================================================= *
+ *                            IMPLEMENTATION                                 *
+ * ========================================================================= */
+
+/**
+ * @deprecated — manteniamo la versione stringa per compatibilità con il
+ * dashboard esistente, ma in futuro potremmo switchare completamente al
+ * formato binario più efficiente.
+ */
+void sendNodeReport() {
+    // Il vecchio report JSON è deprecato in favore di quello binario
+    sendNodeReportBinary();
+}
+
+/**
+ * Invia il report dei nodi in formato binario.
+ * Usa un buffer locale per evitare allocazioni dinamiche.
+ */
+void sendNodeReportBinary() {
+    const uint8_t maxNodesPerPacket = 8;
+    uint8_t       totalNodes        = (uint8_t)s_nodeTableSize;
+    uint8_t       offset            = 0;
+
+    while (offset < totalNodes) {
+        uint8_t  nodesInThisPacket = (uint8_t)min((int)maxNodesPerPacket, (int)(totalNodes - offset));
+        uint16_t payloadSize       = 2 + (nodesInThisPacket * sizeof(nodeEntryCompact));
+
+        uint8_t buffer[200]; // Buffer su stack sufficiente per 8 nodi + header
+        if (payloadSize > sizeof(buffer)) {
+            LOG_ERROR("[GATEWAY] payloadSize %d > buffer %d", payloadSize, sizeof(buffer));
+            return;
+        }
+
+        // Header payload
+        buffer[0] = DEV_ESP_NOW_GATEWAY; // 0xFE
+        buffer[1] = nodesInThisPacket;
+
+        // Riempi gli entry
+        nodeEntryCompact *entries  = (nodeEntryCompact *)(buffer + 2);
+        uint32_t          nowSec   = millis() / 1000;
+
+        for (uint8_t i = 0; i < nodesInThisPacket; i++) {
+            NodeRecord *node         = &s_nodeTable[offset + i];
+            entries[i].deviceID      = node->deviceID;
+            entries[i].flags         = node->isEspNow ? 0x01 : 0x00;
+            if (node->sensorHealth != 0xFF) {
+                entries[i].flags |= (node->sensorHealth << 1); // bit 1-4 per la salute
+            }
+            entries[i].fwVersion     = node->fwVersion;
+            
+            // CORREZIONE: parentesi!
+            uint32_t lastSeenSecNode = (nowSec - (node->lastSeen / 1000));
+            entries[i].lastSeenSec   = lastSeenSecNode;
+            entries[i].uptimeSec     = node->uptime; // v5.0
+            
+            memcpy(entries[i].mac, node->mac, 6);
+            entries[i].txFailCount   = node->txFailCount;
+            entries[i].rssi          = 0x80; // RSSI RIMOSSO (0x80 = valore nullo)
+            
+            // Debug: stampa primo nodo
+            if (i == 0 && offset == 0) {
+                LOG_VERBOSE("[GATEWAY] Node[%d]: ID=0x%02X, flags=%d, fw=%d, lastSec=%lu, fails=%d",
+                    i, entries[i].deviceID, entries[i].flags, entries[i].fwVersion,
+                    entries[i].lastSeenSec, entries[i].txFailCount);
+            }
+        }
+
+        // Costruisci frame completo con header protocollo
+        uint8_t finalBuffer[256];
+        size_t  frameLen = pp_buildPacket(TYPE_NODE_REPORT, buffer, payloadSize, finalBuffer);
+
+        if (frameLen > 0) {
+            // DEBUG: stampa raw hex del frame
+            LOG_VERBOSE("[GATEWAY] Frame raw (%d byte): ", frameLen);
+            char hexBuf[512] = {0};
+            for (size_t i = 0; i < frameLen && i < 64; i++) {
+                char tmp[4];
+                snprintf(tmp, sizeof(tmp), "%02X ", finalBuffer[i]);
+                strcat(hexBuf, tmp);
+            }
+            LOG_VERBOSE("[GATEWAY] %s", hexBuf);
+            
+            mqttWifi::client.publish("homie/logs/nodes/report", finalBuffer, frameLen, false);
+            LOG_INFO("[GATEWAY] Report binario inviato: %d nodi (%d byte)", nodesInThisPacket, frameLen);
+        } else {
+            LOG_ERROR("[GATEWAY] pp_buildPacket fallita!");
+        }
+
+        offset += nodesInThisPacket;
+        if (offset < totalNodes)
+            delay(100);
+    }
+}
+
+
+// ==========================================
+// FILE: /media/progetti_ext/PROJECT/Platformio/EspNowGateway/src/radio.h
+// ==========================================
+
+#pragma once
+
+/**
+ * @file radio.h
+ * @brief ESP-NOW layer — FIFO, callbacks, peer management, radio init
+ */
+
+#include <Arduino.h>
+#include <stdint.h>
+#include <esp_now.h>
+#include "config.h"
+
+/* ========================================================================= *
+ *                            GLOBALS (extern)                               *
+ * ========================================================================= */
+
+extern uint8_t broadcastAddress[6];
+// extern volatile int8_t g_last_espnow_rssi; // RIMOSSO: inaccuratezza e complicazione
+
+/* ========================================================================= *
+ *                            FIFO SLOT                                      *
+ * ========================================================================= */
+
+struct RxSlot {
+    uint8_t mac[6];
+    uint8_t data[MAX_PKT_SIZE];
+    uint8_t len;
+    // int8_t  rssi; // RIMOSSO
+    bool    used;
+};
+
+/* ========================================================================= *
+ *                            GLOBALS (extern)                               *
+ * ========================================================================= */
+
+extern volatile uint8_t g_radio_fifo_head;
+extern volatile uint8_t g_radio_fifo_tail;
+extern RxSlot           g_radio_fifo[FIFO_DEPTH];
+extern portMUX_TYPE     g_radio_fifo_mux;
+
+extern bool             g_radio_needs_reset;
+
+// FIX #6 — MAC mittente usato per unicast ACK (non broadcast)
+extern uint8_t          s_last_data_sender_mac[6];
+extern bool             s_last_data_sender_valid;
+
+/* ========================================================================= *
+ *                            API                                            *
+ * ========================================================================= */
+
+/**
+ * Registra il MAC sorgente come peer ESP-NOW (idempotente).
+ * FIX #1/#8 — usa WIFI_IF_STA e channel 0 coerentemente col setup STA.
+ */
+void learnPeer(const uint8_t *mac);
+
+/**
+ * Inizializza o ripristina lo stack ESP-NOW.
+ * Deve essere chiamata DOPO che il WiFi STA è connesso al router.
+ *
+ * FIX #1 — Pattern allineato al file di riferimento:
+ *   - WIFI_STA (non WIFI_AP_STA)
+ *   - peerInfo.channel = 0 (canale AP corrente)
+ *   - WIFI_IF_STA per tutti i peer
+ */
+void setupRadio();
+
+/**
+ * Callback ESP-NOW ricezione — ISR-like context.
+ * FIX #2 — accesso alla FIFO protetto da spinlock.
+ * (registrata internamente da setupRadio)
+ */
+void onEspNowRecv(const esp_now_recv_info *recv_info, const uint8_t *data, int len);
+
+/**
+ * Callback ESP-NOW invio — hardware ACK.
+ * (registrata internamente da setupRadio)
+ */
+void onEspNowSend(const wifi_tx_info_t *tx_info, esp_now_send_status_t status);
+
+/* ========================================================================= *
+ *                            FIFO HELPERS (inline)                          *
+ * ========================================================================= */
+
+static inline bool fifoFull()  { return ((g_radio_fifo_tail + 1) % FIFO_DEPTH) == g_radio_fifo_head; }
+static inline bool fifoEmpty() { return g_radio_fifo_head == g_radio_fifo_tail; }
+
+
+// ==========================================
+// FILE: /media/progetti_ext/PROJECT/Platformio/EspNowGateway/src/mqtt_handler.h
+// ==========================================
+
+#pragma once
+
+/**
+ * @file mqtt_handler.h
+ * @brief MQTT handler — bridge inverso MQTT→radio, ACK, heartbeat autonomo
+ */
+#include <Arduino.h>
+#include <stdint.h>
+
+/* ========================================================================= *
+ *                            API                                            *
+ * ========================================================================= */
+
+/**
+ * Callback MQTT — chiamata da PubSubClient ad ogni messaggio ricevuto.
+ * Gestisce tre casi:
+ *   1. ACK stringa da mariner.js  → conversione binaria + unicast radio
+ *   2. TYPE_TIME (heartbeat)      → unicast a tutti i nodi radio attivi
+ *   3. Comandi/dati binari (0xAA) → bridge verso la radio o il gateway stesso
+ *
+ * Da registrare con: mqttWifi::client.setCallback(onMqttMessage)
+ */
+void onMqttMessage(char *topic, byte *payload, unsigned int length);
+
+/**
+ * Invia via MQTT il comando AC_SWITCH_TO_ESPNOW a tutti i nodi.
+ * Richiama i nodi che, dopo un reboot, sono rimasti in modalità WiFi/MQTT
+ * affinché tornino a usare ESP-NOW.
+ * Viene chiamata all'avvio e ad ogni riconnessione.
+ */
+void richiamaNodiInRadio();
+
+
+// ==========================================
+// FILE: /media/progetti_ext/PROJECT/Platformio/EspNowGateway/src/node_table.cpp
+// ==========================================
+
+/**
+ * @file node_table.cpp
+ * @brief Node tracking — implementazione LRU con rimozione peer ESP-NOW
+ *
+ * FIX #9 — il peer ESP-NOW soppiantato viene rimosso con esp_now_del_peer()
+ *           prima di sovrascrivere la entry nella tabella.
+ */
+
+#include "node_table.h"
+
+#include <Arduino.h>
+#include <esp_now.h>
+#include <log_lib.h>
+
+/* ========================================================================= *
+ *                            STORAGE                                        *
+ * ========================================================================= */
+
+NodeRecord s_nodeTable[256] = {};
+int s_nodeTableSize = 0;
+
+/* ========================================================================= *
+ *                            IMPLEMENTATION                                 *
+ * ========================================================================= */
+
+void cleanupNodeTable() {
+  static uint32_t lastCleanup = 0;
+  if (millis() - lastCleanup < 60000)
+    return;
+  lastCleanup = millis();
+
+  uint32_t now = millis();
+  for (int i = 0; i < s_nodeTableSize; i++) {
+    if (now - s_nodeTable[i].lastSeen > 3600000) {
+      LOG_INFO("[SYSTEM] Rimozione nodo inattivo: 0x%02X",
+               s_nodeTable[i].deviceID);
+      // FIX #9 — Rimuoviamo il peer da ESP-NOW prima di sovrascrivere
+      if (s_nodeTable[i].isEspNow) {
+        esp_now_del_peer(s_nodeTable[i].mac);
+      }
+      for (int j = i; j < s_nodeTableSize - 1; j++) {
+        s_nodeTable[j] = s_nodeTable[j + 1];
+      }
+      s_nodeTableSize--;
+      i--;
+    }
+  }
+}
+
+void updateNodeTable(uint8_t devID, const uint8_t mac[6], bool isEspNow,
+                     uint16_t fwVer, bool isIdentity, uint8_t health, uint32_t uptime) {
+  int idx = -1;
+
+  // 1. Cerca per MAC
+  if (mac) {
+    for (int i = 0; i < s_nodeTableSize; i++) {
+      if (memcmp(s_nodeTable[i].mac, mac, 6) == 0) {
+        idx = i;
+        if (isIdentity && devID != 0xFF && s_nodeTable[i].deviceID != devID) {
+          s_nodeTable[i].deviceID = devID;
+        }
+        break;
+      }
+    }
+  }
+
+  // 2. Se non trovato per MAC, cerca per deviceID
+  if (idx == -1 && devID != 0xFF) {
+    for (int i = 0; i < s_nodeTableSize; i++) {
+      if (s_nodeTable[i].deviceID == devID) {
+        idx = i;
+        break;
+      }
+    }
+  }
+
+  // 3. Se non esiste ancora, inserisci (o sostituisci LRU)
+  if (idx == -1) {
+    if (!isIdentity && !mac)
+      return;
+
+    if (s_nodeTableSize < 256) {
+      idx = s_nodeTableSize++;
+    } else {
+      // Sostituzione LRU
+      idx = 0;
+      for (int i = 1; i < 256; i++) {
+        if (s_nodeTable[i].lastSeen < s_nodeTable[idx].lastSeen)
+          idx = i;
+      }
+      // FIX #9 — Rimuoviamo il peer ESP-NOW soppiantato
+      if (s_nodeTable[idx].isEspNow) {
+        esp_now_del_peer(s_nodeTable[idx].mac);
+      }
+    }
+
+    s_nodeTable[idx].deviceID = isIdentity ? devID : 0xFF;
+    s_nodeTable[idx].fwVersion = 0;
+    s_nodeTable[idx].isEspNow = false;
+    s_nodeTable[idx].txFailCount = 0;
+    s_nodeTable[idx].sensorHealth = 0xFF; // Inizialmente sconosciuto
+
+    if (mac)
+      memcpy(s_nodeTable[idx].mac, mac, 6);
+    else
+      memset(s_nodeTable[idx].mac, 0, 6);
+
+    LOG_INFO("[SYSTEM] Registrato 0x%02X (%s)", s_nodeTable[idx].deviceID,
+             isEspNow ? "ESPNOW" : "MQTT");
+  }
+
+  // 4. Aggiorna i campi della entry trovata/creata
+  uint32_t now = millis();
+  if (fwVer != 0)
+    s_nodeTable[idx].fwVersion = fwVer;
+
+  if (health != 0xFF)
+    s_nodeTable[idx].sensorHealth = health;
+
+  if (uptime != 0)
+    s_nodeTable[idx].uptime = uptime;
+
+  if (isEspNow) {
+    s_nodeTable[idx].isEspNow = true;
+    s_nodeTable[idx].lastSeen = now;
+    s_nodeTable[idx].txFailCount = 0;
+    // s_nodeTable[idx].rssi = 0; // RIMOSSO
+    if (mac)
+      memcpy(s_nodeTable[idx].mac, mac, 6);
+  } else {
+    // Evita flip-flop: se il nodo è stato visto via radio negli ultimi 2s
+    // non lo "degrado" a MQTT
+    if (s_nodeTable[idx].isEspNow && (now - s_nodeTable[idx].lastSeen < 2000))
+      return;
+    s_nodeTable[idx].isEspNow = false;
+    s_nodeTable[idx].lastSeen = now;
+    // s_nodeTable[idx].rssi = 0; // RIMOSSO
+  }
+}
+
+
+// ==========================================
+// FILE: /media/progetti_ext/PROJECT/Platformio/EspNowGateway/src/mqtt_handler.cpp
+// ==========================================
+
+/**
+ * @file mqtt_handler.cpp
+ * @brief MQTT handler — bridge inverso MQTT→radio, ACK, heartbeat autonomo
+ *
+ * Fix applicati:
+ *   FIX #6 — ACK stringa girato in unicast al mittente (non broadcast):
+ *             s_last_data_sender_mac usato come destinatario diretto.
+ *   FIX #7 — Rebroadcast esclude TYPE_ACK e TYPE_TIME per evitare loop.
+ */
+
+#include "mqtt_handler.h"
+#include "node_table.h"
+#include "node_report.h"
+#include "radio.h"
+#include "config.h"
+
+#include <Arduino.h>
+#include <log_lib.h>
+#include <mqttWifi.h>
+#include <shared_config.h>
+#include <topic.h>
+
+/* ========================================================================= *
+ *                            IMPLEMENTATION                                 *
+ * ========================================================================= */
+
+void richiamaNodiInRadio() {
+    if (!mqttWifi::client.connected())
+        return;
+
+    ackData d;
+    d.deviceID = 0xFF;
+    d.status   = AC_SWITCH_TO_ESPNOW;
+    d.cmdEcho  = 0;
+    d.valEcho  = 0;
+
+    uint8_t buffer[10];
+    size_t  sz = pp_buildPacket(0x00, (uint8_t *)&d, sizeof(ackData), buffer);
+    bool    ok = mqttWifi::client.publish(espNowBridgeAck, buffer, sz);
+    if (ok)
+        LOG_INFO("[SYSTEM] Recovery: Comando switch-back inviato via MQTT");
+}
+
+/**
+ * MQTT Message Callback (Node-RED → nodes).
+ *
+ * CASO 1: ACK stringa da mariner.js
+ *   Converte la stringa ("end"/"error"/"failed") in un pacchetto binario
+ *   TYPE_ACK e lo invia in broadcast radio (il nodo destinatario è già
+ *   identificato da s_last_data_sender_mac).
+ *   FIX #6 — usa s_last_data_sender_mac per l'unicast.
+ *
+ * CASO 2: Pacchetti binari (magic byte 0xAA)
+ *   A. TYPE_TIME   → unicast a tutti i nodi radio attivi (txFailCount < 3)
+ *   B. Comandi per il Gateway stesso (devId == DEV_ESP_NOW_GATEWAY)
+ *   C. Bridge inverso verso la radio (unicast o broadcast)
+ */
+void onMqttMessage(char *topic, byte *payload, unsigned int length) {
+
+    // ------------------------------------------------------------------ //
+    // CASO 1: ACK stringa da mariner.js (Conversione in Binario)          //
+    // ------------------------------------------------------------------ //
+    if (strcmp(topic, espNowBridgeAck) == 0 &&
+        (length < 6 || payload[0] != 0xAA)) {
+
+        if (!s_last_data_sender_valid) {
+            LOG_WARN("[ACK-STR] Ricevuto ACK stringa ma nessun mittente radio recente valido");
+            return;
+        }
+
+        // 1. Identifichiamo il deviceID del destinatario radio
+        uint8_t targetID = 0xFF;
+        for (int i = 0; i < s_nodeTableSize; i++) {
+            if (memcmp(s_nodeTable[i].mac, s_last_data_sender_mac, 6) == 0) {
+                targetID = s_nodeTable[i].deviceID;
+                break;
+            }
+        }
+
+        if (targetID == 0xFF) {
+            LOG_WARN("[ACK-STR] Mittente radio %02X:%02X:%02X:%02X:%02X:%02X non trovato in tabella",
+                     s_last_data_sender_mac[0], s_last_data_sender_mac[1], s_last_data_sender_mac[2],
+                     s_last_data_sender_mac[3], s_last_data_sender_mac[4], s_last_data_sender_mac[5]);
+            return;
+        }
+
+        // 2. Mappiamo la stringa allo stato del PacketProtocol
+        // Se è un oggetto JSON, status rimarrà AC_OK (1) che va bene per i sensori
+        uint8_t status = AC_OK;
+        String  cmd    = String((const char *)payload, length);
+        cmd.trim();
+
+        if      (cmd == "end" || cmd.indexOf("\"status\":2") > 0)    status = AC_END;
+        else if (cmd == "error" || cmd.indexOf("\"status\":4") > 0)  status = AC_ERROR;
+        else if (cmd == "failed" || cmd.indexOf("\"status\":3") > 0) status = AC_FAILED;
+
+        // 3. Costruiamo il pacchetto binario TYPE_ACK
+        ackData d;
+        d.deviceID = targetID;
+        d.status   = status;
+        d.cmdEcho  = 0xFF; // N/A
+        d.valEcho  = 0xFF; // N/A
+
+        uint8_t buf[12];
+        size_t  sz = pp_buildPacket(TYPE_ACK, (uint8_t *)&d, sizeof(ackData), buf);
+
+        // FIX #6 — Invio UNICAST al mittente (non broadcast)
+        esp_err_t err = esp_now_send(s_last_data_sender_mac, buf, sz);
+        
+        LOG_INFO(
+            "[ACK-STR] Convertito '%s' -> Binario (Target: 0x%02X, Status: %d) -> %s",
+            cmd.length() > 20 ? (cmd.substring(0, 17) + "...").c_str() : cmd.c_str(), 
+            targetID, status, (err == ESP_OK ? "OK" : esp_err_to_name(err)));
+        return;
+    }
+
+    // ------------------------------------------------------------------ //
+    // CASO 2: PACCHETTI BINARI (magic byte 0xAA)                          //
+    // ------------------------------------------------------------------ //
+    if (length >= 6 && payload[0] == 0xAA) {
+        uint8_t type  = payload[2];
+        uint8_t devId = payload[5];
+
+        // Tracking nodi MQTT: registra il mittente se il pacchetto è un'identità (Announce o Sensore).
+        // EVITIAMO di registrare per TYPE_COMMAND, TYPE_ACK o TYPE_TIME perché in quel caso
+        // il devId nel payload rappresenta la DESTINAZIONE o il Master, non il mittente MQTT.
+        bool isIdentity = (type == TYPE_ANNOUNCE || type == TYPE_METEO || type == TYPE_DHT || 
+                           type == TYPE_BME || type == TYPE_PZEM || type == TYPE_BOILER || 
+                           type == TYPE_CAMINETTO);
+
+        if (isIdentity && devId != 0xFF && devId != DEV_ESP_NOW_GATEWAY) {
+            uint16_t fw = 0;
+            if (type == TYPE_ANNOUNCE && length >= 9) {
+                const announceData *ann = (const announceData *)(payload + 5);
+                fw = ann->fwVersion;
+            }
+            updateNodeTable(devId, nullptr, false, fw, true);
+        }
+
+        // A. Heartbeat (TYPE_TIME) → Unicast a tutti i nodi radio attivi
+        if (type == TYPE_TIME) {
+            LOG_VERBOSE("[HB] Heartbeat ricevuto su %s -> Unicast Unroll", topic);
+            for (int i = 0; i < s_nodeTableSize; i++) {
+                if (s_nodeTable[i].isEspNow && s_nodeTable[i].txFailCount < 3) {
+                    esp_now_send(s_nodeTable[i].mac,
+                                 (const uint8_t *)payload, length);
+                }
+            }
+            return;
+        }
+
+        // B. Comando locale per il Gateway (0xFE)
+        if (devId == DEV_ESP_NOW_GATEWAY && type == TYPE_COMMAND &&
+            length >= 7) {
+            const cmdData *d = (const cmdData *)(payload + 5);
+            if (d->command == CMD_GET_NODES) {
+                LOG_INFO("[SYSTEM] Comando GET_NODES ricevuto — invio report");
+                sendNodeReport();
+                sendNodeReportBinary();
+            }
+            return;
+        }
+
+        // C. Bridge inverso verso la radio
+        bool isKnownRadioNode = false;
+        for (int i = 0; i < s_nodeTableSize; i++) {
+            if (s_nodeTable[i].deviceID == devId && s_nodeTable[i].isEspNow) {
+                isKnownRadioNode = true;
+                break;
+            }
+        }
+
+        bool sent = false;
+        // Inoltra in UNICAST se il nodo è conosciuto
+        if (devId != 0xFF && isKnownRadioNode) {
+            for (int i = 0; i < s_nodeTableSize; i++) {
+                if (s_nodeTable[i].deviceID == devId && s_nodeTable[i].isEspNow) {
+                    esp_err_t err = esp_now_send(s_nodeTable[i].mac,
+                                                 (const uint8_t *)payload,
+                                                 length);
+                    if (err == ESP_OK) {
+                        sent = true;
+                        LOG_INFO("[BRIDGE] Inviato UNICAST a 0x%02X (Type: 0x%02X)", devId, type);
+                    } else {
+                        LOG_ERROR("[BRIDGE] Fallito UNICAST a 0x%02X: %s", devId, esp_err_to_name(err));
+                    }
+                    break;
+                }
+            }
+        }
+
+        // Se non inviato in unicast (es. broadcast o nodo non in tabella), invia in BROADCAST
+        if (!sent && (devId == 0xFF || !isKnownRadioNode)) {
+            esp_err_t err = esp_now_send(broadcastAddress, (const uint8_t *)payload, length);
+            if (err == ESP_OK) {
+                LOG_INFO("[BRIDGE] Inviato BROADCAST (Type: 0x%02X)", type);
+            }
+        }
+        return;
+    }
+}
+
+
+// ==========================================
+// FILE: /media/progetti_ext/PROJECT/Platformio/EspNowGateway/src/node_table.h
+// ==========================================
+
+#pragma once
+
+/**
+ * @file node_table.h
+ * @brief Node tracking — struttura LRU e API di gestione nodi
+ */
+
+#include <stdint.h>
+
+/* ========================================================================= *
+ *                            DATA STRUCTURES                                *
+ * ========================================================================= */
+
+struct NodeRecord {
+    uint8_t          deviceID;
+    uint8_t          mac[6];
+    uint32_t         lastSeen;
+    uint32_t         uptime;       // Aggiunto v5.0
+    uint16_t         fwVersion;
+    bool             isEspNow;
+    volatile uint8_t txFailCount;
+    uint8_t          sensorHealth; // Bitmask (bit 0-3)
+};
+
+/* ========================================================================= *
+ *                            GLOBALS (extern)                               *
+ * ========================================================================= */
+
+extern NodeRecord s_nodeTable[256];
+extern int        s_nodeTableSize;
+
+/* ========================================================================= *
+ *                            API                                            *
+ * ========================================================================= */
+
+/**
+ * Aggiorna (o inserisce) un nodo nella tabella.
+ * - Se la tabella è piena usa politica LRU: rimuove il nodo visto meno di
+ *   recente e, se era ESP-NOW, lo cancella da esp_now prima di sovrascrivere.
+ *
+ * @param devID      Device ID del nodo (0xFF = sconosciuto)
+ * @param mac        Indirizzo MAC (può essere nullptr per nodi MQTT puri)
+ * @param isEspNow   true = nodo radio, false = nodo MQTT
+ * @param fwVer      Versione firmware (0 = non aggiornare)
+ * @param isIdentity true se il pacchetto corrente porta l'identità del nodo
+ * @param health     Salute del sensore (0xFF = non aggiornare)
+ * @param uptime     Uptime del nodo (0 = non aggiornare)
+ */
+void updateNodeTable(uint8_t devID, const uint8_t mac[6], bool isEspNow,
+                     uint16_t fwVer = 0, bool isIdentity = true, uint8_t health = 0xFF, uint32_t uptime = 0);
+
+/**
+ * Rimuove dalla tabella i nodi non visti da più di 1 ora (eseguito al massimo
+ * ogni 60 secondi).
+ */
+void cleanupNodeTable();
+
+
+// ==========================================
+// FILE: /media/progetti_ext/PROJECT/Platformio/EspNowGateway/src/config.h
+// ==========================================
+
+#pragma once
+
+/**
+ * @file config.h
+ * @brief Costanti e macro condivise — ESP32 Gateway
+ */
+
+#include <stdint.h>
+
+/* ========================================================================= *
+ *                            PACKET TYPES                                   *
+ * ========================================================================= */
+
+#define PKT_ANNOUNCE   0x01  // Learning only — DO NOT publish to MQTT
+#define CMD_GET_NODES  0x90  // Command to request node list
+
+/* ========================================================================= *
+ *                            FIFO PARAMETERS                                *
+ * ========================================================================= */
+
+#define FIFO_DEPTH    8
+#define MAX_PKT_SIZE  250
+
+/* ========================================================================= *
+ *                            BROADCAST ADDRESS                              *
+ * ========================================================================= */
+
+extern uint8_t broadcastAddress[6];
+
+
+// ==========================================
+// FILE: /media/progetti_ext/PROJECT/Platformio/EspNowGateway/src/node_report.h
+// ==========================================
+
+#pragma once
+
+/**
+ * @file node_report.h
+ * @brief Generazione report nodi — formato stringa (JSON) e binario
+ */
+
+/* ========================================================================= *
+ *                            API                                            *
+ * ========================================================================= */
+
+/**
+ * Invia su MQTT un report JSON della node table corrente.
+ * @deprecated Mantenuto per compatibilità con il dashboard esistente.
+ *             Considerare la migrazione a sendNodeReportBinary().
+ */
+void sendNodeReport();
+
+/**
+ * Invia su MQTT il report della node table in formato binario compatto.
+ * Divide automaticamente in pacchetti da max 8 nodi per rispettare
+ * il limite del buffer MQTT.
+ */
+void sendNodeReportBinary();
+
+
+// ==========================================
+// FILE: /media/progetti_ext/PROJECT/Platformio/EspNowGateway/src/radio.cpp
+// ==========================================
+
+/**
+ * @file radio.cpp
+ * @brief ESP-NOW layer — FIFO, callbacks, peer management, radio init
+ *
+ * Fix applicati:
+ *   FIX #1/#8 — setupRadio() e learnPeer() usano WIFI_IF_STA + channel 0
+ *   FIX #2    — FIFO protetta da portENTER_CRITICAL_ISR (spinlock)
+ *   FIX #3    — slot FIFO azzerato con memset dopo la lettura
+ */
+
+#include "radio.h"
+#include "node_table.h"
+
+#include "esp_wifi.h"
+#include <Arduino.h>
+#include <WiFi.h>
+#include <esp_now.h>
+#include <log_lib.h>
+
+/* ========================================================================= *
+ *                            GLOBALS                                        *
+ * ========================================================================= */
+
+uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+
+RxSlot g_radio_fifo[FIFO_DEPTH] = {};
+volatile uint8_t g_radio_fifo_head = 0;
+volatile uint8_t g_radio_fifo_tail = 0;
+portMUX_TYPE g_radio_fifo_mux = portMUX_INITIALIZER_UNLOCKED;
+
+bool g_radio_needs_reset = false;
+
+// FIX #6 — MAC mittente salvato solo DOPO publish riuscito (vedi gateway_main)
+uint8_t s_last_data_sender_mac[6] = {0};
+bool s_last_data_sender_valid = false;
+
+/* ========================================================================= *
+ *                            IMPLEMENTATION                                 *
+ * ========================================================================= */
+
+// Gestione RSSI RIMOSSA perché complicata e inaccurata via promiscuous hook
+
+/**
+ * Registra il MAC sorgente come peer ESP-NOW (idempotente).
+ * FIX #1/#8 — usa WIFI_IF_STA e channel 0.
+ */
+void learnPeer(const uint8_t *mac) {
+  if (!mac)
+    return;
+
+  // Su ESP32 esp_now_is_peer_exist restituisce bool o esp_err_t a seconda della versione.
+  // Per sicurezza proviamo sempre a cancellarlo prima di aggiungerlo.
+  esp_now_del_peer(mac);
+
+  esp_now_peer_info_t peer = {};
+  memcpy(peer.peer_addr, mac, 6);
+  peer.channel = 0; // 0 = usa il canale corrente dell'interfaccia STA
+  peer.encrypt = false;
+  peer.ifidx = WIFI_IF_STA; // Fondamentale su ESP32
+
+  esp_err_t err = esp_now_add_peer(&peer);
+  if (err != ESP_OK) {
+    LOG_ERROR(
+        "[LEARN] Errore aggiunta peer %02X:%02X:%02X:%02X:%02X:%02X -> %s",
+        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], esp_err_to_name(err));
+  } else {
+    LOG_VERBOSE(
+        "[LEARN] Peer %02X:%02X:%02X:%02X:%02X:%02X aggiunto/aggiornato",
+        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+  }
+}
+
+/**
+ * ESP-NOW Receive Callback — ISR-like context.
+ * FIX #2 — accesso alla FIFO protetto da spinlock.
+ */
+
+void onEspNowRecv(const esp_now_recv_info *recv_info, const uint8_t *data, int len) {
+  if (!recv_info || !data || len <= 0 || len > MAX_PKT_SIZE)
+    return;
+
+  portENTER_CRITICAL_ISR(&g_radio_fifo_mux);
+
+  bool full = fifoFull();
+  if (!full) {
+    RxSlot &slot = g_radio_fifo[g_radio_fifo_tail];
+    memcpy(slot.mac, recv_info->src_addr, 6);
+    memcpy(slot.data, data, len);
+    slot.len = (uint8_t)len;
+    // slot.rssi = g_last_espnow_rssi; // RIMOSSO
+    slot.used = true;
+    g_radio_fifo_tail = (g_radio_fifo_tail + 1) % FIFO_DEPTH;
+  }
+  portEXIT_CRITICAL_ISR(&g_radio_fifo_mux);
+}
+
+/**
+ * ESP-NOW Send Callback — hardware ACK.
+ * Aggiorna txFailCount nella node table.
+ */
+void onEspNowSend(const wifi_tx_info_t *tx_info, esp_now_send_status_t status) {
+  if (!tx_info)
+    return;
+  
+  const uint8_t *mac = tx_info->des_addr;
+  if (status == ESP_NOW_SEND_SUCCESS) {
+    LOG_VERBOSE("[TX-ACK] Consegnato a %02X:%02X:%02X:%02X:%02X:%02X", mac[0],
+                mac[1], mac[2], mac[3], mac[4], mac[5]);
+    for (int i = 0; i < s_nodeTableSize; i++) {
+      if (memcmp(s_nodeTable[i].mac, mac, 6) == 0) {
+        s_nodeTable[i].txFailCount = 0;
+        break;
+      }
+    }
+  } else {
+    LOG_WARN("[TX-ACK] FALLITO invio a %02X:%02X:%02X:%02X:%02X:%02X", mac[0],
+             mac[1], mac[2], mac[3], mac[4], mac[5]);
+    for (int i = 0; i < s_nodeTableSize; i++) {
+      if (memcmp(s_nodeTable[i].mac, mac, 6) == 0) {
+        if (s_nodeTable[i].txFailCount < 255)
+          s_nodeTable[i].txFailCount = s_nodeTable[i].txFailCount + 1;
+        break;
+      }
+    }
+  }
+}
+
+/**
+ * Inizializza o ripristina la configurazione ESP-NOW.
+ *
+ * FIX #1 — Pattern allineato al file di riferimento:
+ *   1. Non crea un softAP — il canale ESP-NOW segue quello del router
+ *   2. Viene chiamata DOPO mqttWifi::setupCompleto() in setup()
+ *   3. peerInfo.channel = 0, WIFI_IF_STA per tutti i peer
+ */
+void setupRadio() {
+  LOG_INFO("[RADIO] Reset stack radio...");
+  esp_now_deinit();
+  delay(100);
+
+  g_radio_needs_reset = false;
+
+  // FIX #1: Se non siamo connessi al WiFi, ESP-NOW non ha senso
+  if (WiFi.status() != WL_CONNECTED) {
+    LOG_WARN("[RADIO] WiFi non connesso: ESP-NOW rimandato al prossimo ciclo");
+    g_radio_needs_reset = true;
+    return;
+  }
+
+  int ch = WiFi.channel();
+  LOG_INFO("[RADIO] Canale reale assegnato dal router: %d", ch);
+
+  if (esp_now_init() != ESP_OK) {
+    LOG_ERROR("[RADIO] Init ESP-NOW FALLITO!");
+    g_radio_needs_reset = true;
+    return;
+  }
+  /* 
+   * La modalità promiscua è stata rimossa per semplificare lo stack 
+   * e migliorare la stabilità del gateway.
+   */
+  // esp_wifi_set_promiscuous(true);
+  // esp_wifi_set_promiscuous_rx_cb(promiscuousRxHook);
+  esp_now_register_recv_cb(
+      [](const esp_now_recv_info *recv_info, const uint8_t *data, int len) {
+        onEspNowRecv(recv_info, data, len);
+      });
+  esp_now_register_send_cb(
+      [](const wifi_tx_info_t *tx_info, esp_now_send_status_t status) {
+        onEspNowSend(tx_info, status);
+      });
+
+  // FIX #1: Broadcast peer — channel 0, WIFI_IF_STA
+  esp_now_peer_info_t bcastPeer = {};
+  memset(bcastPeer.peer_addr, 0xFF, 6);
+  bcastPeer.channel = 0; // 0 = canale corrente interfaccia STA
+  bcastPeer.encrypt = false;
+  bcastPeer.ifidx = WIFI_IF_STA; // FIX #1: STA, non AP
+
+  esp_now_add_peer(&bcastPeer);
+  LOG_INFO("[RADIO] ESP-NOW pronto su ch %d (STA)", ch);
+}
+
+
+// ==========================================
+// FILE: /media/progetti_ext/PROJECT/Platformio/EspNowGateway/src/gateway_main.cpp
+// ==========================================
+
+/**
+ * @file gateway_main.cpp
+ * @brief ESP32 Gateway — Orchestrazione setup() e loop()
+ */
+
+#include "HardwareSerial.h"
+#include "config.h"
+#include "mqtt_handler.h"
+#include "node_report.h"
+#include "node_table.h"
+#include "radio.h"
+
+#include "esp_bt.h"
+#include "esp_bt_main.h"
+#include "esp_wifi.h"
+#include <Arduino.h>
+#include <PubSubClient.h>
+#include <WiFi.h>
+#include <esp_now.h>
+#include <log_lib.h>
+#include <mqttWifi.h>
+#include <password.h>
+#include <shared_config.h>
+#include <topic.h>
+
+/* ========================================================================= *
+ *                            TOPICS                                         *
+ * ========================================================================= */
+
+const char *PROGETTO_TOPICS[] = {
+    systemTopic,     updateTopic,        espNowBridgeCmd,
+    espNowBridgeAck, espNowBridgeBuffer,
+    nullptr // Sentinella obbligatoria
+};
+
+/* ========================================================================= *
+ *                            GLOBALS                                        *
+ * ========================================================================= */
+
+MotivoSpegnimento m_wifi_status;
+
+/* ========================================================================= *
+ *                            SETUP                                          *
+ * ========================================================================= */
+
+void setup() {
+  logSerialBegin(38400);
+  delay(500);
+  btStop();
+
+  Serial.printf("ESP32 Arduino Core version: %d\n", ESP_ARDUINO_VERSION);
+  Serial.printf("ESP-IDF version: %s\n", esp_get_idf_version());
+
+  LOG_INFO("========================================");
+  LOG_INFO("   ESP32 GATEWAY (Resilient Star)      ");
+  LOG_INFO("========================================");
+
+  mqttWifi::client.setCallback(onMqttMessage);
+
+  // setupCompleto gestisce WiFi.mode(WIFI_STA) + WiFi.begin() internamente
+  m_wifi_status =
+      mqttWifi::setupCompleto(ipEspNowBridge, EspNowBridge, PROGETTO_TOPICS);
+
+  // FIX #1: ESP-NOW inizializzato DOPO la connessione WiFi stabile
+  setupRadio();
+
+  if (m_wifi_status == CONN_OK) {
+    richiamaNodiInRadio();
+    udpLogBegin();
+    logSetDeviceName("EspNowGateway");
+  }
+
+  mqttWifi::client.setBufferSize(2048);
+  esp_wifi_set_ps(WIFI_PS_NONE);
+}
+
+/* ========================================================================= *
+ *                            LOOP                                           *
+ * ========================================================================= */
+
+void loop() {
+  static uint32_t lastConnCheck = 0;
+  static uint32_t lastRadioCheck = 0;
+  static uint32_t lastRecall = 0;
+  static uint32_t lastSelfTime = 0;
+  static bool wasOffline = true;
+
+  uint32_t now = millis();
+
+  // 1. WiFi/MQTT Watchdog (ogni 30s)
+  if (now - lastConnCheck > 30000) {
+    lastConnCheck = now;
+    m_wifi_status = mqttWifi::gestisciConnessione();
+
+    if (m_wifi_status == CONN_OK) {
+      if (wasOffline) {
+        LOG_INFO("[WIFI] Gateway Online -> Recall nodi");
+        richiamaNodiInRadio();
+        if (WiFi.status() == WL_CONNECTED)
+          udpLogBegin();
+        wasOffline = false;
+      }
+    } else {
+      wasOffline = true;
+    }
+  }
+
+  // 2. Radio Watchdog
+  if (g_radio_needs_reset && (now - lastRadioCheck > 10000)) {
+    lastRadioCheck = now;
+    LOG_WARN("[RADIO] Rilevato stato di errore! Tentativo ripristino...");
+    setupRadio();
+  }
+
+  // 3. Recall Periodico (ogni 5 minuti)
+  if (now - lastRecall > 300000) {
+    lastRecall = now;
+    richiamaNodiInRadio();
+  }
+
+  // 4. Heartbeat autonomo (ogni 60s) quando MQTT è offline
+  if (m_wifi_status != CONN_OK && (now - lastSelfTime > 60000)) {
+    lastSelfTime = now;
+
+    timeData td;
+    td.deviceID = DEV_ESP_NOW_GATEWAY;
+    td.hour = 33;
+    td.minute = 33;
+    td.day = 6;
+
+    uint8_t tbuf[16];
+    size_t tsz = pp_buildPacket(TYPE_TIME, (uint8_t *)&td, sizeof(td), tbuf);
+    esp_err_t terr = esp_now_send(broadcastAddress, tbuf, tsz);
+
+    LOG_WARN("[HB-SELF] MQTT offline — Heartbeat autonomo 33:33 inviato (%s)",
+             terr == ESP_OK ? "OK" : esp_err_to_name(terr));
+  }
+
+  mqttWifi::loop();
+  cleanupNodeTable();
+
+  // 5. Consuma ESP-NOW FIFO
+  while (true) {
+    portENTER_CRITICAL(&g_radio_fifo_mux);
+    bool empty = fifoEmpty();
+    portEXIT_CRITICAL(&g_radio_fifo_mux);
+    if (empty)
+      break;
+
+    RxSlot localSlot;
+    portENTER_CRITICAL(&g_radio_fifo_mux);
+    localSlot = g_radio_fifo[g_radio_fifo_head];
+    memset(&g_radio_fifo[g_radio_fifo_head], 0, sizeof(RxSlot));
+    g_radio_fifo_head = (g_radio_fifo_head + 1) % FIFO_DEPTH;
+    portEXIT_CRITICAL(&g_radio_fifo_mux);
+
+    const uint8_t *mac = localSlot.mac;
+    const uint8_t *data = localSlot.data;
+    uint8_t len = localSlot.len;
+
+    LOG_INFO("[RX] %02X:%02X:%02X:%02X:%02X:%02X | Len: %d | Type: 0x%02X",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], len,
+             len >= 3 ? data[2] : 0xFF);
+
+    if (len < 5 || data[0] != 0xAA) {
+      LOG_WARN("[RX] Frame non valido — scartato");
+      continue;
+    }
+
+    uint8_t type = data[2];
+    uint8_t devID = data[5];
+    uint32_t extractedUptime = 0;
+
+    // Estrazione Uptime per reportistica (v5.0)
+    if (type == TYPE_BOILER && len >= (5 + sizeof(boilerData))) {
+      extractedUptime = ((boilerData *)(data + 5))->uptime;
+    } else if (type == TYPE_PZEM && len >= (5 + sizeof(EneMainData))) {
+      extractedUptime = ((EneMainData *)(data + 5))->uptime;
+    } else if (type == TYPE_DHT && len >= (5 + sizeof(dhtData))) {
+      extractedUptime = ((dhtData *)(data + 5))->uptime;
+    }
+
+    learnPeer(mac);
+    bool isIdentity =
+        (type != TYPE_COMMAND && type != TYPE_ACK && type != TYPE_TIME);
+    updateNodeTable(devID, mac, true, 0, isIdentity, 0xFF, extractedUptime);
+
+    if (type == TYPE_COMMAND && len >= 7) {
+      const cmdData *d = (const cmdData *)(data + 5);
+      if (d->command == CMD_GET_NODES) {
+        sendNodeReport();
+        continue;
+      }
+    }
+
+    if (type == TYPE_ACK && len >= 7) {
+      const ackData *ack = (const ackData *)(data + 5);
+      if (ack->cmdEcho == TYPE_TIME) {
+        LOG_INFO("[RX] Health Mask da 0x%02X: 0x%02X", ack->deviceID,
+                 ack->valEcho);
+        updateNodeTable(ack->deviceID, mac, true, 0, false, ack->valEcho);
+      }
+    }
+
+    if (type == PKT_ANNOUNCE) {
+      const announceData *ann = (const announceData *)(data + 5);
+      updateNodeTable(devID, mac, true, ann->fwVersion);
+      LOG_INFO("[RX] ANNOUNCE da 0x%02X (fw %u)", devID, ann->fwVersion);
+
+      uint8_t ackBuf[128];
+      ackData resp;
+      resp.deviceID = devID;
+      resp.status = AC_SWITCH_TO_ESPNOW;
+      resp.cmdEcho = PKT_ANNOUNCE;
+      resp.valEcho = 0;
+
+      size_t sz = pp_buildPacket(0x00, (uint8_t *)&resp, sizeof(resp), ackBuf);
+      esp_err_t err = esp_now_send(mac, ackBuf, sz);
+      LOG_INFO("[RX] ACK Announce a 0x%02X -> %s", devID,
+               err == ESP_OK ? "OK" : esp_err_to_name(err));
+      continue;
+    }
+
+    // 6. Gestione Bridge (MQTT e Rebroadcast)
+    if (m_wifi_status == CONN_OK) {
+      // --- CASO ONLINE: Bridge verso MQTT + Rebroadcast ---
+      const char *targetTopic = espNowBridgeBuffer;
+      if (type == TYPE_ACK)
+        targetTopic = espNowBridgeAck;
+      else if (type == TYPE_COMMAND)
+        targetTopic = espNowBridgeCmd;
+
+      bool ok = mqttWifi::client.publish(targetTopic, data, len, false);
+      LOG_INFO("[RX] MQTT Publish su %s: %s", targetTopic,
+               ok ? "OK" : "FALLITO");
+
+      if (ok) {
+        memcpy(s_last_data_sender_mac, mac, 6);
+        s_last_data_sender_valid = true;
+      } else {
+        s_last_data_sender_valid = false;
+        
+        ackData resp;
+        resp.deviceID = devID;
+        resp.status = AC_FAILED;
+        resp.cmdEcho = type;
+        resp.valEcho = 0;
+
+        uint8_t ackBuf[128];
+        size_t sz = pp_buildPacket(0x00, (uint8_t *)&resp, sizeof(resp), ackBuf);
+        esp_now_send(mac, ackBuf, sz);
+        LOG_WARN("[RX] MQTT Publish fallito, inviato ACK BINARIO (FAILED) al nodo 0x%02X", devID);
+      }
+    } else {
+      // --- CASO OFFLINE (Emergenza): Notifica fallimento cloud ---
+      LOG_WARN("[RX] MQTT offline — Modalità Emergency Repeater locale");
+
+      // Inviamo comunque un AC_FAILED al mittente per attivare la sua resilienza locale (EEPROM/Retry)
+      // tranne che per gli ACK stessi o il tempo per evitare loop.
+      if (type != TYPE_ACK && type != TYPE_TIME) {
+        ackData resp;
+        resp.deviceID = devID;
+        resp.status = AC_FAILED;
+        resp.cmdEcho = type;
+        resp.valEcho = 0;
+
+        uint8_t ackBuf[128];
+        size_t sz = pp_buildPacket(0x00, (uint8_t *)&resp, sizeof(resp), ackBuf);
+        esp_now_send(mac, ackBuf, sz);
+      }
+    }
+
+    // --- REBROADCAST (Transparent Repeater Locale) ---
+    // Sempre attivo (sia online che offline) per garantire la coerenza delle UI Nextion
+    // e la portata del segnale in tutta la casa. Esclude solo Heartbeat e pacchetti del Gateway.
+    if (type != TYPE_TIME && devID != DEV_ESP_NOW_GATEWAY) {
+      esp_err_t err = esp_now_send(broadcastAddress, data, len);
+      if (err == ESP_ERR_ESPNOW_NOT_INIT) {
+        g_radio_needs_reset = true;
+      } else if (err == ESP_OK) {
+        LOG_VERBOSE("[RX] Rebroadcast locale (Type: 0x%02X)", type);
+      } else {
+        LOG_ERROR("[RX] Rebroadcast locale fallito: %s", esp_err_to_name(err));
+      }
+    }
+  }
+}
+

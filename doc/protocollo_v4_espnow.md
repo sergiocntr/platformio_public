@@ -32,3 +32,10 @@ Sull'ESP8266, per ricevere i broadcast senza perdite, l'ordine è tassativo:
 
 ## 5. Standard Sensori
 *   **Valore 255.0**: Segnala sensore guasto o scollegato. Obbligatorio per tutti i nodi.
+
+## 6. Note di sviluppo
+### Riepilogo Interventi - migliorie Gateway
+1.  **Bridge Trasparente**: Abbiamo abilitato l'inoltro Unicast per tutti i tipi di pacchetti binari da MQTT a Radio (non solo i comandi).
+2.  **Tracking Intelligente**: Abbiamo impedito che i pacchetti di ritorno (ACK/Comandi) sovrascrivessero erroneamente lo stato dei nodi radio nella tabella LRU del Gateway.
+3.  **Parsing Robusto**: Abbiamo aggiunto il supporto per gli ACK in formato JSON e reso sicura la gestione dei buffer MQTT non terminati.
+4.  **Peer Management**: Abbiamo semplificato la gestione dei peer ESP-NOW per evitare errori di registrazione duplicata.

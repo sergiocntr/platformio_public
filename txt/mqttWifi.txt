@@ -1,6 +1,6 @@
 
 // ==========================================
-// FILE: mqttWifi/mqttWifi.cpp
+// FILE: /media/progetti_ext/PROJECT/platformio_public/mqttWifi/mqttWifi.cpp
 // ==========================================
 
 #include "mqttWifi.h"
@@ -18,27 +18,27 @@ namespace mqttWifi {
 
 // Variabili globali per il trasporto (accessibili da protocol.cpp tramite
 // extern)
-IMqttTransport *mqttTransport = nullptr;
-MqttTransportType currentTransport = DEFAULT_MQTT_TRANSPORT;
+INetworkTransport *networkTransport = nullptr;
+NetworkTransportType currentTransport = DEFAULT_NETWORK_TRANSPORT;
 
 PubSubClient client(c_mqtt);
 volatile AckState ackStatus = NO_ACK;
-volatile uint8_t expectedAckDeviceID = 0xFF;
+volatile uint8_t expectedAckDeviceID = 0x00;
 
 void setAckStatus(AckState s) { ackStatus = s; }
 
-void setMqttTransport(MqttTransportType t) {
-  if (mqttTransport) {
-    mqttTransport->disconnect();
-    delete mqttTransport;
+void setNetworkTransport(NetworkTransportType t) {
+  if (networkTransport) {
+    networkTransport->disconnect();
+    delete networkTransport;
   }
   currentTransport = t;
-  mqttTransport = createMqttTransport(t);
-  if (mqttTransport)
-    mqttTransport->init();
+  networkTransport = createNetworkTransport(t);
+  if (networkTransport)
+    networkTransport->init();
 }
 
-MqttTransportType getMqttTransport() { return currentTransport; }
+NetworkTransportType getNetworkTransport() { return currentTransport; }
 
 // ========== CONFIGURAZIONE ==========
 const uint8_t MAX_TENTATIVI = 3;
@@ -55,7 +55,7 @@ const char **m_topics = nullptr;
 
 // ========== GESTIONE PUBBLICAZIONE ==========
 bool publish(const char *topic, const char *message, bool retained) {
-  if (getMqttTransport() == MqttTransportType::ESPNOW) {
+  if (getNetworkTransport() == NetworkTransportType::ESPNOW) {
     LOG_WARN("[PUBLISH] Stringa raw non consigliata in ESP-NOW. Usa binario.");
     return false;
   }
@@ -74,21 +74,41 @@ bool publish(const char *topic, const char *message, bool retained) {
 
 bool publish(const char *topic, const uint8_t *payload, size_t length,
              bool retained) {
-  if (getMqttTransport() == MqttTransportType::ESPNOW) {
-    if (mqttTransport) {
-      uint8_t type = (length >= 3) ? payload[2] : 0xFF;
+  if (getNetworkTransport() == NetworkTransportType::ESPNOW) {
+    // --- LOGICA DI ROUTING (Resilient Star v4) ---
+    // 1. I comandi e il tempo sono preferibilmente UNICAST (più affidabili)
+    uint8_t type = (length >= 3) ? payload[2] : 0xFF;
 
-      // Mantieni UNICAST per i pacchetti che richiedono conferma o sessione
-      if (type == TYPE_COMMAND || type == TYPE_TIME || type == TYPE_ACK) {
-        return mqttTransport->send(payload, length);
+    // 1. I comandi e il tempo (Discovery via Broadcast Pattern)
+    if (type == TYPE_COMMAND || type == TYPE_TIME) {
+      // Se non siamo "accoppiati" o il MAC non è noto, forziamo il BROADCAST (Handshake)
+      if (!g_gateway_mac_trovato || !g_gateway_paired) {
+        LOG_INFO("[PUBLISH] Handshake mode: invio BROADCAST (type: 0x%02X)",
+                 type);
+        return networkTransport->sendBroadcast(payload, length);
       }
 
-      // Passa a BROADCAST per telemetria  announce e !!!ACK!!! (tutti devono avere la conferma del comando eseguito (Resilient Star v4))
-      return mqttTransport->sendBroadcast(payload, length);
-    }
-    return false;
-  }
+      // Se siamo accoppiati, usiamo l'Unicast efficiente
+      LOG_VERBOSE(
+          "[PUBLISH] Invio UNICAST a %02X:%02X:%02X:%02X:%02X:%02X\n",
+          g_real_gateway_mac[0], g_real_gateway_mac[1], g_real_gateway_mac[2],
+          g_real_gateway_mac[3], g_real_gateway_mac[4], g_real_gateway_mac[5]);
 
+      if (networkTransport->send(payload, length))
+        return true;
+
+      // Se l'Unicast fallisce a livello radio, perdiamo l'accoppiamento e proviamo broadcast
+      LOG_WARN("[PUBLISH] Unicast fallito (radio), reset pairing e riprovo broadcast...");
+      g_gateway_paired = false; 
+      return networkTransport->sendBroadcast(payload, length);
+    }
+
+    // 2. Gli ACK e la TELEMETRIA sono sempre BROADCAST (tutti devono sentire)
+    // Questo risolve la contraddizione segnalata nel file bugs_to_solve.txt
+    return networkTransport->sendBroadcast(payload, length);
+  } // <--- CHIUDE IL RAMO ESPNOW
+
+  // RAMO MQTT/WiFi
   if (!client.connected())
     return false;
 
@@ -138,11 +158,11 @@ void logMotivoSpegnimento(MotivoSpegnimento motivo) {
 void adessoDormo(uint8_t mode, MotivoSpegnimento motivo) {
   logMotivoSpegnimento(motivo);
 
-  if (getMqttTransport() != MqttTransportType::ESPNOW && client.connected()) {
+  if (getNetworkTransport() != NetworkTransportType::ESPNOW && client.connected()) {
     client.disconnect();
   }
 
-  if (getMqttTransport() != MqttTransportType::ESPNOW) {
+  if (getNetworkTransport() != NetworkTransportType::ESPNOW) {
     WiFi.disconnect(true);
     WiFi.mode(WIFI_OFF);
   }
@@ -253,18 +273,27 @@ bool sottoscriviTopics(const char *progetto_topics[]) {
 }
 
 MotivoSpegnimento gestisciConnessione() {
-  if (getMqttTransport() == MqttTransportType::ESPNOW) {
-    if (mqttTransport && mqttTransport->connect()) {
-      mqttTransport->keepAlive();
+  if (getNetworkTransport() == NetworkTransportType::ESPNOW) {
+    if (networkTransport && networkTransport->connect()) {
+      networkTransport->keepAlive();
       return CONN_OK;
     }
+#ifndef FORCE_ESPNOW
     // ESP-NOW connect() fallito: cleanup PRIMA di switchare a WiFi
     LOG_WARN("[CONN] ESP-NOW fallito, switch a WiFi con cleanup");
-    if (mqttTransport) {
-      mqttTransport->disconnect();
+    if (networkTransport) {
+      networkTransport->disconnect();
     }
-    setMqttTransport(MqttTransportType::WIFI);
+    setNetworkTransport(NetworkTransportType::WIFI_MQTT);
+    
+    // Forza disconnessione per pulire lo stato radio (fondamentale su ESP8266)
+    WiFi.disconnect(true); 
+    delay(100);
     setupWifi();
+#else
+    LOG_ERROR("[CONN] ESP-NOW fallito. Fallback WiFi DISABILITATO (FORCE_ESPNOW).");
+    return CONN_FALLITO; 
+#endif
   }
 
   if (WiFi.status() != WL_CONNECTED) {
@@ -288,30 +317,35 @@ void loop() {
 
   // Watchdog Resilienza: controlla il heartbeat TIME dal gateway
   if (lastTimeSynced != 0 && (now - lastTimeSynced > SYNC_TIMEOUT)) {
-    LOG_WARN("[WATCHDOG] Heartbeat TIME perso! Fallback...");
-    // FIX PANIC: Resettiamo lastTimeSynced a 'now' per evitare lo spam di log ad ogni loop
-    // Se il problema persiste, il watchdog scatterà di nuovo tra SYNC_TIMEOUT ms.
-    lastTimeSynced = now; 
-    if (getMqttTransport() == MqttTransportType::ESPNOW) {
-      setMqttTransport(MqttTransportType::WIFI);
+    LOG_WARN("[WATCHDOG] Heartbeat TIME perso da %lu ms!",
+             (unsigned long)(now - lastTimeSynced));
+
+    if (getNetworkTransport() == NetworkTransportType::ESPNOW) {
+      setNetworkTransport(NetworkTransportType::WIFI_MQTT);
       setupWifi();
       if (connectWifi() && connectMqtt()) {
-        // Riconnessione riuscita: resetta il watchdog
         lastTimeSynced = now;
         LOG_INFO("[WATCHDOG] Fallback a WiFi riuscito. Watchdog resettato.");
       } else {
-        // Riconnessione fallita: NON resettare, lascia il watchdog attivo
-        LOG_ERROR(
-            "[WATCHDOG] Fallback a WiFi fallito. Watchdog rimane attivo.");
+        // Riconnessione fallita: evitiamo lo spam ma non resettiamo a 2 minuti.
+        // Lo facciamo scattare di nuovo tra 30 secondi.
+        lastTimeSynced = now - SYNC_TIMEOUT + 30000;
+        LOG_ERROR("[WATCHDOG] Fallback fallito. Riprovo tra 30s.");
       }
+    } else {
+      // Già in WiFi ma niente tempo? Siamo offline.
+      lastTimeSynced = now - SYNC_TIMEOUT + 30000;
+      LOG_ERROR("[WATCHDOG] Persa sincronizzazione in WiFi. Riprovo tra 30s.");
     }
   }
 
-  if (getMqttTransport() == MqttTransportType::ESPNOW) {
+  if (getNetworkTransport() == NetworkTransportType::ESPNOW) {
     uint8_t rxBuf[250];
-    int rxLen = receive(rxBuf, sizeof(rxBuf));
-    if (rxLen > 0)
+    int rxLen;
+    // Svuota TUTTA la FIFO ad ogni ciclo per evitare overrun in caso di burst
+    while ((rxLen = receive(rxBuf, sizeof(rxBuf))) > 0) {
       pp_dispatchPacket(rxBuf, (unsigned int)rxLen);
+    }
   } else {
     client.loop();
   }
@@ -320,13 +354,13 @@ void loop() {
 __attribute__((weak)) void setCallback() {}
 
 int receive(uint8_t *buffer, size_t buflen) {
-  return mqttTransport ? mqttTransport->receive(buffer, buflen) : 0;
+  return networkTransport ? networkTransport->receive(buffer, buflen) : 0;
 }
 
 // ========== AGGIORNAMENTO FIRMWARE ==========
 void checkForUpdates() {
   LOG_INFO("[UPDATE] Controllo aggiornamenti...");
-  bool wasEspNow = (getMqttTransport() == MqttTransportType::ESPNOW);
+  bool wasEspNow = (getNetworkTransport() == NetworkTransportType::ESPNOW);
 
   if (wasEspNow) {
     setupWifi();
@@ -346,32 +380,36 @@ void checkForUpdates() {
   }
 
   if (wasEspNow)
-    setMqttTransport(MqttTransportType::ESPNOW);
+    setNetworkTransport(NetworkTransportType::ESPNOW);
 }
 MotivoSpegnimento setupCompleto(IPAddress ip, const char *mqtt_id,
-                                 const char *progetto_topics[],
-                                 uint8_t deviceID) {
+                                const char *progetto_topics[],
+                                uint8_t deviceID) {
   m_ip = ip;
   m_deviceID = deviceID;
   m_topics = progetto_topics;
   snprintf(m_mqtt_id, sizeof(m_mqtt_id), "%s", mqtt_id);
 
   // --- SCELTA TRASPORTO (Resilient Star v4) ---
-  // Di default partiamo SEMPRE con ESP-NOW. È veloce, leggero e non richiede 
+  // Di default partiamo SEMPRE con ESP-NOW. È veloce, leggero e non richiede
   // connessione al router. Se il gateway non risponde, passeremo a WiFi.
 #ifdef ESP32_MQTT
   // Il Gateway (Bridge) parla ovviamente MQTT/WiFi direttamente dal broker
-  setMqttTransport(MqttTransportType::WIFI);
+  setNetworkTransport(NetworkTransportType::WIFI_MQTT);
 #else
-  setMqttTransport(MqttTransportType::ESPNOW);
+  setNetworkTransport(NetworkTransportType::ESPNOW);
 #endif
 
   // Inizializza il trasporto scelto
-  if (getMqttTransport() == MqttTransportType::ESPNOW) {
-    if (mqttTransport && !mqttTransport->connect()) {
+  if (getNetworkTransport() == NetworkTransportType::ESPNOW) {
+    if (networkTransport && !networkTransport->connect()) {
+#ifndef FORCE_ESPNOW
       LOG_WARN("[SETUP] Gateway ESP-NOW non trovato. Fallback a WiFi...");
-      setMqttTransport(MqttTransportType::WIFI);
+      setNetworkTransport(NetworkTransportType::WIFI_MQTT);
       setupWifi();
+#else
+      LOG_ERROR("[SETUP] Gateway ESP-NOW non trovato. Fallback DISABILITATO.");
+#endif
     }
   } else {
     setupWifi();
@@ -383,25 +421,22 @@ MotivoSpegnimento setupCompleto(IPAddress ip, const char *mqtt_id,
 
 
 // ==========================================
-// FILE: mqttWifi/mqttWifi_transport.h
+// FILE: /media/progetti_ext/PROJECT/platformio_public/mqttWifi/mqttWifi_transport.h
 // ==========================================
 
 #pragma once
 
-#include <stdint.h>
 #include <stddef.h>
+#include <stdint.h>
 
 // Trasport layer per la libreria mqttWifi (astrazione over WiFi/ESPNOW).
 
-enum class MqttTransportType {
-  WIFI,
-  ESPNOW,
-  DUMMY
-};
+// Dichiara l'enum a livello globale (o dentro un namespace separato)
+enum class NetworkTransportType { WIFI_MQTT, ESPNOW, DUMMY, MATTER };
 
-class IMqttTransport {
+class INetworkTransport {
 public:
-  virtual ~IMqttTransport() {}
+  virtual ~INetworkTransport() {}
 
   virtual bool init() = 0;
   virtual bool connect() = 0;
@@ -415,23 +450,26 @@ public:
   virtual void keepAlive() = 0;
 };
 
+#include <PacketProtocol.h>
 #include <shared_config.h>
 
-IMqttTransport *createMqttTransport(MqttTransportType type);
+// Forward declaration (senza namespace)
+INetworkTransport *createNetworkTransport(NetworkTransportType type);
 
 #if defined(USE_MQTT_ESPNOW)
-static constexpr MqttTransportType DEFAULT_MQTT_TRANSPORT = MqttTransportType::ESPNOW;
+static constexpr NetworkTransportType DEFAULT_NETWORK_TRANSPORT =
+    NetworkTransportType::ESPNOW;
 #elif defined(USE_MQTT_WIFI) || defined(MQTT_TRANSPORT_WIFI)
-static constexpr MqttTransportType DEFAULT_MQTT_TRANSPORT = MqttTransportType::WIFI;
+static constexpr NetworkTransportType DEFAULT_NETWORK_TRANSPORT =
+    NetworkTransportType::WIFI_MQTT;
 #else
-static constexpr MqttTransportType DEFAULT_MQTT_TRANSPORT = MqttTransportType::WIFI;
+static constexpr NetworkTransportType DEFAULT_NETWORK_TRANSPORT =
+    NetworkTransportType::WIFI_MQTT;
 #endif
 
 
-
-
 // ==========================================
-// FILE: mqttWifi/mqttWifi_transport.cpp
+// FILE: /media/progetti_ext/PROJECT/platformio_public/mqttWifi/mqttWifi_transport.cpp
 // ==========================================
 
 #include "mqttWifi_transport.h"
@@ -453,105 +491,103 @@ extern "C" {
 #include <PubSubClient.h>
 
 namespace mqttWifi {
-extern PubSubClient client; // Definita in mqttWifi.cpp
-extern uint8_t m_deviceID;  // Aggiunto per l'handshake
+// Variabile definita in mqttWifi.cpp (stesso namespace)
+extern uint8_t m_deviceID;
 
-// FIFO per il rx di ESP-NOW (risolve race condition e buffer overrun)
-static const size_t RX_FIFO_SLOTS = 5;
+// Variabili e funzioni interne
+static const size_t RX_FIFO_SLOTS = 10;
 struct RxFifoSlot {
   uint8_t data[250];
   size_t len;
 };
 static RxFifoSlot g_rxFifo[RX_FIFO_SLOTS];
-static volatile size_t g_rxFifoHead = 0;      // Scritto dalla callback
-static volatile size_t g_rxFifoTail = 0;      // Letto dal loop
-static volatile uint32_t g_rxFifoOverrun = 0; // Contatore overrun
+static volatile size_t g_rxFifoHead = 0;
+static volatile size_t g_rxFifoTail = 0;
+static volatile uint32_t g_rxFifoOverrun = 0;
 
 bool g_gateway_mac_trovato = false;
+bool g_gateway_paired = false;
 uint8_t g_real_gateway_mac[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
 void onInternalEspNowRx(const uint8_t *mac, const uint8_t *data, size_t len) {
   if (len > 0 && len <= sizeof(RxFifoSlot::data)) {
-    // Calcola il prossimo slot nella FIFO
     size_t nextHead = (g_rxFifoHead + 1) % RX_FIFO_SLOTS;
 
-    // Controlla overrun (la FIFO è piena)
     if (nextHead == g_rxFifoTail) {
-      g_rxFifoOverrun++;
-      LOG_WARN("[RX-FIFO] Overrun! Pacchetto perso.");
+      g_rxFifoOverrun = g_rxFifoOverrun + 1;
       return;
     }
 
-    // Scrivi nel slot corrente (protetto perché scrivere un'intera struct è
-    // atomico)
     RxFifoSlot &slot = g_rxFifo[g_rxFifoHead];
     slot.len = len;
     memcpy(slot.data, data, len);
-
-    // Avanza il head (con barrier per sincronizzazione)
     g_rxFifoHead = nextHead;
 
     if (!g_gateway_mac_trovato) {
-      g_gateway_mac_trovato = true;
-      memcpy(g_real_gateway_mac, mac, 6);
+      bool isGateway = (memcmp(mac, ESPNOW_GATEWAY_MAC, 6) == 0) ||
+                       (memcmp(mac, ESPNOW_GATEWAY_AP_MAC, 6) == 0);
+
+      if (isGateway && len >= 10) { // HEADER_SIZE(5) + ackData(4) + checksum(1) = 10 bytes
+        uint8_t type    = data[2]; // TYPE_ACK = 0x00
+        uint8_t status  = data[6]; // ackData.status = AC_SWITCH_TO_ESPNOW (payload byte [1])
+        uint8_t cmdEcho = data[7]; // ackData.cmdEcho = TYPE_ANNOUNCE   (payload byte [2])
+
+        if (type == TYPE_ACK && status == AC_SWITCH_TO_ESPNOW &&
+            cmdEcho == TYPE_ANNOUNCE) {
+          g_gateway_mac_trovato = true;
+          memcpy(g_real_gateway_mac, mac, 6);
+          LOG_INFO("[TRANSPORT] Gateway Trovato: %02X:%02X:%02X:%02X:%02X:%02X",
+                   mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 
 #ifdef ESP8266_BUILD
-      esp_now_del_peer(g_real_gateway_mac); // Per sicurezza
-      esp_now_add_peer(g_real_gateway_mac, ESP_NOW_ROLE_COMBO,
-                       WIFI_CHANNEL_GATEWAY, NULL, 0);
+          esp_now_del_peer(g_real_gateway_mac);
+          esp_now_add_peer(g_real_gateway_mac, ESP_NOW_ROLE_COMBO,
+                           WIFI_CHANNEL_GATEWAY, NULL, 0);
 #elif defined(ESP32_BUILD)
-      esp_now_peer_info_t peerInfo = {};
-      peerInfo.channel = WIFI_CHANNEL_GATEWAY;
-      peerInfo.encrypt = false;
-      memcpy(peerInfo.peer_addr, g_real_gateway_mac, 6);
-      esp_now_add_peer(&peerInfo);
+          esp_now_peer_info_t peerInfo = {};
+          peerInfo.channel = WIFI_CHANNEL_GATEWAY;
+          peerInfo.encrypt = false;
+          memcpy(peerInfo.peer_addr, g_real_gateway_mac, 6);
+          esp_now_add_peer(&peerInfo);
 #endif
+        }
+      }
     }
   }
 }
 
-// Espone contatore overrun per diagnostica
 uint32_t getRxFifoOverrunCount() { return g_rxFifoOverrun; }
-} // namespace mqttWifi
 
 // -----------------------------------------------------------------------------
-// WIFI TRANSPORT
+// WIFI MQTT TRANSPORT
 // -----------------------------------------------------------------------------
-class WifiTransport : public IMqttTransport {
+class WifINetworkTransport : public INetworkTransport {
 public:
   bool init() override {
     LOG_VERBOSE("[TRANSPORT] WifiTransport init\n");
+    delay(100);
     return true;
   }
 
-  bool connect() override {
-    // La connessione WiFi effettiva è gestita dalle funzioni legacy
-    // connectWifi() in mqttWifi.cpp per ora.
-    return (WiFi.status() == WL_CONNECTED);
-  }
+  bool connect() override { return (WiFi.status() == WL_CONNECTED); }
 
   void disconnect() override { WiFi.disconnect(true); }
 
   bool isConnected() override { return WiFi.status() == WL_CONNECTED; }
 
-  bool send(const uint8_t *data, size_t len) override {
-    // Il trasporto WiFi delega al PubSubClient nel main code.
-    return false;
-  }
+  bool send(const uint8_t *data, size_t len) override { return false; }
 
   bool sendBroadcast(const uint8_t *data, size_t len) override { return false; }
 
   int receive(uint8_t *buffer, size_t buflen) override { return 0; }
 
-  void keepAlive() override {
-    // Gestito da client.loop()
-  }
+  void keepAlive() override {}
 };
 
 // -----------------------------------------------------------------------------
-// ESP-NOW TRANSPORT NATIVO (Basato su testNow/main.cpp)
+// ESP-NOW TRANSPORT NATIVO
 // -----------------------------------------------------------------------------
-class EspNowTransport : public IMqttTransport {
+class EspNowTransport : public INetworkTransport {
 private:
   bool _initialized = false;
   bool _peerAdded = false;
@@ -563,58 +599,60 @@ public:
 
     LOG_VERBOSE("[TRANSPORT] EspNowTransport init nativo\n");
 
-    // 1. Configurazione base WiFi: STA + Disconnect
     WiFi.mode(WIFI_STA);
     WiFi.disconnect();
 
 #ifdef ESP8266_BUILD
-    // 2. Imposta il canale PRIMA di esp_now_init() (l'init aggancia il canale
-    // corrente)
-    wifi_set_channel(WIFI_CHANNEL_GATEWAY);
-    delay(100); // Permetti al radio di stabilizzarsi
-
-    // 3. Init ESP-NOW
     if (esp_now_init() != 0) {
       LOG_ERROR("[TRANSPORT] ESP-NOW Init fallito\n");
       return false;
     }
 
-    // 4. Imposta ruolo e callbacks
     esp_now_set_self_role(ESP_NOW_ROLE_COMBO);
-
     esp_now_register_recv_cb([](uint8_t *mac, uint8_t *data, uint8_t len) {
       mqttWifi::onInternalEspNowRx(mac, data, len);
     });
-    esp_now_register_send_cb([](uint8_t *mac, uint8_t status){
-      // status == 0: successo
-                             });
+
+    wifi_set_channel(WIFI_CHANNEL_GATEWAY);
+    delay(100);
+
+    esp_now_register_send_cb([](uint8_t *mac, uint8_t status){});
 
     LOG_INFO("[INIT] Canale reale (ESP8266): %d | MAC: %s", wifi_get_channel(),
              WiFi.macAddress().c_str());
 
 #elif defined(ESP32_BUILD)
-    // 2. Imposta il canale PRIMA di esp_now_init()
     esp_wifi_set_channel(WIFI_CHANNEL_GATEWAY, WIFI_SECOND_CHAN_NONE);
-    delay(100); // Permetti al radio di stabilizzarsi
+    delay(100);
 
-    // 3. Init ESP-NOW
     if (esp_now_init() != ESP_OK) {
       LOG_ERROR("[TRANSPORT] ESP-NOW Init fallito (ESP32)\n");
       return false;
     }
 
-    // 4. Registra callbacks
     esp_now_register_recv_cb(
-        [](const uint8_t *mac, const uint8_t *data, int len) {
-          mqttWifi::onInternalEspNowRx(mac, data, len);
+        [](const esp_now_recv_info *recv_info, const uint8_t *data, int len) {
+          if (recv_info) {
+            mqttWifi::onInternalEspNowRx(recv_info->src_addr, data, len);
+          }
         });
+
     esp_now_register_send_cb(
-        [](const uint8_t *mac, esp_now_send_status_t status) {
-          // status confirmation
-        });
+        [](const wifi_tx_info_t *tx_info, esp_now_send_status_t status) {});
 
     LOG_INFO("[INIT] Canale reale (ESP32): %d | MAC: %s", WiFi.channel(),
              WiFi.macAddress().c_str());
+
+    // Aggiunge il peer broadcast subito in init() — necessario per sendBroadcast()
+    // anche senza fare l'ANNOUNCE handshake (es. nodi one-shot)
+    {
+      esp_now_peer_info_t bcastPeer = {};
+      bcastPeer.channel = WIFI_CHANNEL_GATEWAY;
+      bcastPeer.encrypt = false;
+      uint8_t bcastMac[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+      memcpy(bcastPeer.peer_addr, bcastMac, 6);
+      esp_now_add_peer(&bcastPeer);
+    }
 #endif
 
     _initialized = true;
@@ -633,40 +671,27 @@ public:
 #ifdef ESP8266_BUILD
     esp_now_add_peer(bcastMac, ESP_NOW_ROLE_COMBO, WIFI_CHANNEL_GATEWAY, NULL,
                      0);
-    // STA MAC del gateway (noto a priori, per handshake announce)
     esp_now_add_peer(const_cast<uint8_t *>(ESPNOW_GATEWAY_MAC),
                      ESP_NOW_ROLE_COMBO, WIFI_CHANNEL_GATEWAY, NULL, 0);
-    // NOTA: Il peer AP_MAC NON viene registrato a priori (è "fantasma").
-    // Invece, il MAC reale del gateway viene determinato dalla callback
-    // onInternalEspNowRx() durante il primo ricevimento, e aggiunto
-    // dinamicamente.
 #elif defined(ESP32_BUILD)
     esp_now_peer_info_t peerInfo = {};
     peerInfo.channel = WIFI_CHANNEL_GATEWAY;
     peerInfo.encrypt = false;
 
-    memcpy(peerInfo.peer_addr, bcastMac, 6);
-    esp_err_t rb = esp_now_add_peer(&peerInfo);
-
+    // Broadcast peer già aggiunto in init() — aggiunge solo il peer unicast del gateway
     memcpy(peerInfo.peer_addr, ESPNOW_GATEWAY_MAC, 6);
-    esp_err_t rg = esp_now_add_peer(&peerInfo);
-    if (rg != ESP_OK && rb != ESP_OK) {
-      LOG_ERROR("[TRANSPORT] Errore aggiunta peer\n");
-    }
+    esp_now_add_peer(&peerInfo);
 #endif
 
-    // --- MANSHAKE ATTIVO (PacketProtocol v3) ---
-    // Header (5) + announceData (4) + XOR (1) = 10 bytes
+    // Pacchetto ANNOUNCE
     uint8_t buf[10];
-    buf[0] = 0xAA; // Magic
-    buf[1] = 0x03; // Protocol Version v3
-    buf[2] = 0x01; // TYPE_ANNOUNCE
-    buf[3] = 0x04; // Payload Length LSB (announceData is 4 bytes)
-    buf[4] = 0x00; // Payload Length MSB
-
-    // Payload (deviceID + protoVer + fwVer)
+    buf[0] = 0xAA;
+    buf[1] = 0x03;
+    buf[2] = TYPE_ANNOUNCE;
+    buf[3] = 0x04;
+    buf[4] = 0x00;
     buf[5] = mqttWifi::m_deviceID;
-    buf[6] = 0x03; // protoVer
+    buf[6] = 0x03;
 #ifdef versione
     buf[7] = (uint8_t)(versione & 0xFF);
     buf[8] = (uint8_t)(versione >> 8);
@@ -674,8 +699,6 @@ public:
     buf[7] = 0;
     buf[8] = 0;
 #endif
-
-    // XOR Checksum
     buf[9] = 0;
     for (uint8_t i = 0; i < 9; i++)
       buf[9] ^= buf[i];
@@ -686,32 +709,33 @@ public:
 
     LOG_INFO("[TRANSPORT] Cerco il Gateway ESP-NOW (Announce)...\n");
     const uint32_t ANNOUNCE_INTERVAL_MS = 300;
-    const uint32_t ANNOUNCE_TIMEOUT_MS = 900; // 3 tentavi * 300ms senza bloccaggio
+    const uint32_t ANNOUNCE_TIMEOUT_MS = 1200;
+    const uint32_t ANNOUNCE_WAIT_AFTER_LAST_MS = 300;
+
     uint32_t announceStart = millis();
     uint32_t lastAnnounceTime = 0;
+    uint32_t lastAnnounceSentAt = 0;
     int announceCount = 0;
 
     while (!mqttWifi::g_gateway_mac_trovato &&
            (millis() - announceStart < ANNOUNCE_TIMEOUT_MS)) {
       uint32_t now = millis();
 
-      // Invia announce ogni ANNOUNCE_INTERVAL_MS
-      if ((now - lastAnnounceTime) >= ANNOUNCE_INTERVAL_MS) {
-#ifdef ESP8266_BUILD
+      if (announceCount < 3 &&
+          (now - lastAnnounceTime) >= ANNOUNCE_INTERVAL_MS) {
         esp_now_send(bcastMac, buf, 10);
-#else
-        esp_now_send(bcastMac, buf, 10);
-#endif
         lastAnnounceTime = now;
+        lastAnnounceSentAt = now;
         announceCount++;
-        LOG_VERBOSE("[TRANSPORT] Announce %d/%d inviato", announceCount, 3);
-
-        if (announceCount >= 3)
-          break; // Massimo 3 tentativi
+        LOG_VERBOSE("[TRANSPORT] Announce %d/3 inviato", announceCount);
       }
 
-      // Yield al sistema (cooperativo scheduling, evita watchdog timeout)
-      delay(10); // Small yield per non occupare il CPU
+      if (announceCount >= 3 &&
+          (millis() - lastAnnounceSentAt) >= ANNOUNCE_WAIT_AFTER_LAST_MS) {
+        break;
+      }
+
+      delay(10);
     }
 
     if (mqttWifi::g_gateway_mac_trovato) {
@@ -731,7 +755,6 @@ public:
       return;
 
 #ifdef ESP8266_BUILD
-    // Rimuovi tutti i peer PRIMA di deinit (evita leak della peer list)
     uint8_t bcastMac[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
     esp_now_del_peer(bcastMac);
     esp_now_del_peer(const_cast<uint8_t *>(ESPNOW_GATEWAY_MAC));
@@ -741,7 +764,6 @@ public:
     }
     esp_now_deinit();
 #elif defined(ESP32_BUILD)
-    // Su ESP32 de-registra i peer prima di deinit
     esp_now_del_peer(ESPNOW_GATEWAY_MAC);
     if (mqttWifi::g_gateway_mac_trovato) {
       esp_now_del_peer(mqttWifi::g_real_gateway_mac);
@@ -764,7 +786,7 @@ public:
 #ifdef ESP8266_BUILD
     int res = esp_now_send(mqttWifi::g_real_gateway_mac,
                            const_cast<uint8_t *>(data), len);
-    return (res == 0); // SUCCESSO
+    return (res == 0);
 #elif defined(ESP32_BUILD)
     esp_err_t res = esp_now_send(mqttWifi::g_real_gateway_mac, data, len);
     return (res == ESP_OK);
@@ -785,29 +807,28 @@ public:
   }
 
   int receive(uint8_t *buffer, size_t buflen) override {
-    // Leggi dalla FIFO (thread-safe per ESP con core unico)
-    if (mqttWifi::g_rxFifoTail == mqttWifi::g_rxFifoHead)
-      return 0; // FIFO vuota
+    if (mqttWifi::g_rxFifoTail == mqttWifi::g_rxFifoHead) {
+      return 0;
+    }
 
-    // Leggi il primo elemento della FIFO
-    const mqttWifi::RxFifoSlot &slot = mqttWifi::g_rxFifo[mqttWifi::g_rxFifoTail];
+    const mqttWifi::RxFifoSlot &slot =
+        mqttWifi::g_rxFifo[mqttWifi::g_rxFifoTail];
     size_t toCopy = (slot.len < buflen) ? slot.len : buflen;
     memcpy(buffer, slot.data, toCopy);
 
-    // Avanza il tail
-    mqttWifi::g_rxFifoTail = (mqttWifi::g_rxFifoTail + 1) % mqttWifi::RX_FIFO_SLOTS;
+    mqttWifi::g_rxFifoTail =
+        (mqttWifi::g_rxFifoTail + 1) % mqttWifi::RX_FIFO_SLOTS;
+
     return (int)toCopy;
   }
 
-  void keepAlive() override {
-    // Nessun polling richiesto, esp_now usa le interrupt.
-  }
+  void keepAlive() override {}
 };
 
 // -----------------------------------------------------------------------------
 // DUMMY TRANSPORT
 // -----------------------------------------------------------------------------
-class DummyTransport : public IMqttTransport {
+class DummyTransport : public INetworkTransport {
 public:
   bool init() override { return true; }
   bool connect() override { return true; }
@@ -819,23 +840,26 @@ public:
   void keepAlive() override {}
 };
 
+} // namespace mqttWifi
+
 // -----------------------------------------------------------------------------
 // FACTORY
 // -----------------------------------------------------------------------------
-IMqttTransport *createMqttTransport(MqttTransportType type) {
+INetworkTransport *createNetworkTransport(NetworkTransportType type) {
   switch (type) {
-  case MqttTransportType::WIFI:
-    return new WifiTransport();
-  case MqttTransportType::ESPNOW:
-    return new EspNowTransport();
+  case NetworkTransportType::WIFI_MQTT:
+    return new mqttWifi::WifINetworkTransport();
+  case NetworkTransportType::ESPNOW:
+    return new mqttWifi::EspNowTransport();
   default:
-    return new DummyTransport();
+    return new mqttWifi::DummyTransport();
   }
-} // namespace mqttWifi
+}
+
 
 
 // ==========================================
-// FILE: mqttWifi/mqttWifi_protocol.cpp
+// FILE: /media/progetti_ext/PROJECT/platformio_public/mqttWifi/mqttWifi_protocol.cpp
 // ==========================================
 
 #include "mqttWifi.h"
@@ -854,25 +878,41 @@ uint32_t lastTimeSynced = 0;
 const uint32_t SYNC_TIMEOUT = 120000; // 2 minuti
 
 static PacketHandler s_appHandler = nullptr;
-extern IMqttTransport
+extern INetworkTransport
     *mqttTransport; // Dichiarazione esterna (dal transport o main)
-extern MqttTransportType currentTransport;
+extern NetworkTransportType currentTransport;
 extern uint8_t expectedAckDeviceID;
 
 void registerPacketHandler(PacketHandler handler) { s_appHandler = handler; }
 
+} // namespace mqttWifi (temporanea uscita)
+
+// Funzione weak per la salute dei sensori: i progetti la possono sovrascrivere.
+// Viene messa nel namespace globale così i vari file main.cpp possono sovrascriverla senza problemi.
+__attribute__((weak)) uint8_t getLocalHealthMask() { return 0x00; }
+
+namespace mqttWifi {
+
 void handleAckPacket(const uint8_t *payload, size_t len) {
   if (len >= 8 && payload[0] == 0xAA && payload[2] == 0x00) {
     uint8_t rcvId = payload[5];
-    if (rcvId == m_deviceID || rcvId == expectedAckDeviceID) {
+    LOG_VERBOSE("[ACK] Ricevuto da ID: 0x%02X (Atteso: 0x%02X o 0x%02X)\n", rcvId, m_deviceID, expectedAckDeviceID);
+    // Accetta l'ACK se è per noi, se è un Broadcast (0xFF) o se è quello che aspettiamo
+    if (rcvId == m_deviceID || rcvId == 0xFF || (expectedAckDeviceID != 0x00 && rcvId == expectedAckDeviceID)) {
       uint8_t status = payload[6];
       ackStatus = (AckState)status;
+      
+      // Ci consideriamo "accoppiati" solo se abbiamo ricevuto un ACK per un comando che stavamo ASPETTANDO noi
+      if (expectedAckDeviceID != 0x00 && rcvId == expectedAckDeviceID && rcvId != 0xFF) {
+        g_gateway_paired = true;
+        LOG_INFO("[PROTOCOL] Handshake riuscito con 0x%02X. Da ora solo Unicast.", rcvId);
+      }
 
       // --- AUTO-SWITCH TRANSPORT ---
       // Se il Gateway ci suggerisce di passare a ESP-NOW e siamo ancora in WiFi
-      if (status == 0x05 && getMqttTransport() != MqttTransportType::ESPNOW) {
+      if (status == 0x05 && getNetworkTransport() != NetworkTransportType::ESPNOW) {
         LOG_INFO("[ACK] Gateway richiede lo switch a ESP-NOW. Eseguo...");
-        setMqttTransport(MqttTransportType::ESPNOW);
+        setNetworkTransport(NetworkTransportType::ESPNOW);
       }
       LOG_VERBOSE("[ACK BIN] Match per ID 0x%02X -> Status: %d\n", rcvId,
                   ackStatus);
@@ -883,13 +923,20 @@ void handleAckPacket(const uint8_t *payload, size_t len) {
 bool pp_dispatchPacket(const uint8_t *payload, unsigned int length) {
 
   // ── 1. Validazione frame ─────────────────────────────────────
+  if (length >= 3) {
+    LOG_VERBOSE("[DISPATCH] Raw Header: %02X %02X %02X (Len: %u)\n",
+                  payload[0], payload[1], payload[2], length);
+  }
+
   if (length < PACKET_MIN_SIZE || payload[0] != PACKET_MAGIC) {
-    LOG_WARN("[DISPATCH] Frame errato o magic missing");
     return false;
   }
 
   ParsedPacket pkt;
   int rc = pp_parsePacket(payload, length, &pkt);
+  if (rc != 0) {
+    LOG_ERROR("[DISPATCH] Parsing fallito con codice: %d\n", rc);
+  }
   if (rc != 0) {
     LOG_ERROR("[DISPATCH] Parse error %d (len=%u)", rc, length);
     return false;
@@ -899,6 +946,9 @@ bool pp_dispatchPacket(const uint8_t *payload, unsigned int length) {
   if (pkt.header.type == 0x08) { // TYPE_TIME
     lastTimeSynced = millis();
     LOG_VERBOSE("[DISPATCH] Heartbeat TIME ricevuto. Watchdog resettato.");
+    
+    // Risposta automatica al Gateway per confermare la presenza e lo stato sensori
+    sendBinaryAck(m_deviceID, TYPE_TIME, ::getLocalHealthMask());
   }
 
   // ── 3. TYPE_ACK ──────────────────────────────────────────────
@@ -932,7 +982,7 @@ bool pp_dispatchPacket(const uint8_t *payload, unsigned int length) {
       LOG_INFO("[DISPATCH] CMD_SYS_RESET (target=0x%02X)", d->deviceID);
       if ((d->deviceID == m_deviceID) || (d->deviceID == 0xFF)) {
         delay(100);
-        if (getMqttTransport() == MqttTransportType::WIFI) {
+        if (getNetworkTransport() == NetworkTransportType::WIFI_MQTT) {
           client.disconnect();
           WiFi.disconnect();
         }
@@ -942,7 +992,7 @@ bool pp_dispatchPacket(const uint8_t *payload, unsigned int length) {
     }
   }
 
-  // ── 5. Hook progetto ─────────────────────────────────────────
+  // ── 3. Dispatch ad applicazione (Progetti specifici) ─────────
   if (s_appHandler) {
     return s_appHandler(pkt);
   }
@@ -967,12 +1017,12 @@ void sendAnnounce() {
   publish(espNowBridgeBuffer, buf, sz, false);
 }
 
-void sendBinaryAck(uint8_t deviceID, uint8_t command, bool on) {
+void sendBinaryAck(uint8_t deviceID, uint8_t command, uint8_t value) {
   ackData d;
   d.deviceID = deviceID;
   d.status = ACK;
   d.cmdEcho = command;
-  d.valEcho = on ? 1 : 0;
+  d.valEcho = value;
 
   uint8_t buffer[HEADER_SIZE + sizeof(ackData) + 1];
   size_t packetSize =
@@ -984,7 +1034,7 @@ AckState waitForAck(uint32_t timeoutMs) {
   unsigned long start = millis();
 
   while (millis() - start < timeoutMs) {
-    if (getMqttTransport() == MqttTransportType::ESPNOW) {
+    if (getNetworkTransport() == NetworkTransportType::ESPNOW) {
       // BUG FIX: svuota TUTTA la FIFO ad ogni iterazione.
       // Prima si leggeva un solo pacchetto ogni 5ms: se arrivavano in
       // sequenza Rebroadcast-Comando + Telemetria-BOILER + ACK, l'ACK
@@ -1013,6 +1063,7 @@ AckState waitForAck(uint32_t timeoutMs) {
 
 AckState publishWithAck(const char *topic, const uint8_t *payload,
                         size_t length, uint8_t retries, uint32_t timeoutMs) {
+  AckState lastRes = NO_ACK;
   for (int i = 0; i <= retries; i++) {
     ackStatus = NO_ACK;
     if (!publish(topic, payload, length, false)) {
@@ -1020,13 +1071,16 @@ AckState publishWithAck(const char *topic, const uint8_t *payload,
       continue;
     }
 
-    AckState res = waitForAck(timeoutMs);
-    if (res == ACK || res == END) {
-      return res;
+    lastRes = waitForAck(timeoutMs);
+    if (lastRes == ACK || lastRes == END) {
+      return lastRes;
+    }
+    if (lastRes == FAILED || lastRes == ERROR || lastRes == SWITCH_TRANSPORT) {
+      return lastRes; // Esci subito in caso di errori logici (evita retry inutili)
     }
     delay(100);
   }
-  return NO_ACK;
+  return lastRes;
 }
 
 AckState sendBinaryCommandWithAck(uint8_t deviceID, bool on, uint8_t retries,
@@ -1056,23 +1110,25 @@ AckState sendBinaryCommandWithAck(uint8_t deviceID, bool on, uint8_t retries,
     if (res == ACK || res == END) {
       LOG_VERBOSE("[CMD-ACK] ✓ Confermato (deviceID=0x%02X, tentativo %d)",
                   deviceID, i + 1);
-      expectedAckDeviceID = 0xFF;
+      expectedAckDeviceID = 0x00;
       return res;
     }
     if (res == ERROR) {
       LOG_ERROR("[CMD-ACK] ✗ ERROR ricevuto (deviceID=0x%02X)", deviceID);
-      expectedAckDeviceID = 0xFF;
+      expectedAckDeviceID = 0x00;
       return ERROR;
     }
 
     LOG_WARN("[CMD-ACK] Tentativo %d/%d senza ACK, riprovo...", i + 1,
              retries + 1);
+    g_gateway_paired = false; // Fallback al prossimo tentativo (forza Broadcast)
     delay(200);
   }
 
   LOG_ERROR("[CMD-ACK] ✗ Nessun ACK dopo %d tentativi (deviceID=0x%02X)",
             retries + 1, deviceID);
-  expectedAckDeviceID = 0xFF;
+  g_gateway_paired = false; 
+  expectedAckDeviceID = 0x00;
   return NO_ACK;
 }
 
@@ -1081,7 +1137,7 @@ AckState sendBinaryCommandWithAck(uint8_t deviceID, bool on, uint8_t retries,
 
 
 // ==========================================
-// FILE: mqttWifi/mqttWifi.h
+// FILE: /media/progetti_ext/PROJECT/platformio_public/mqttWifi/mqttWifi.h
 // ==========================================
 
 #pragma once
@@ -1092,7 +1148,7 @@ AckState sendBinaryCommandWithAck(uint8_t deviceID, bool on, uint8_t retries,
 
 #elif ESP32_BUILD
 #include "esp_bt.h"
-#include "esp_bt_main.h"
+//#include "esp_bt_main.h"
 #include <HTTPClient.h>
 #include <HTTPUpdate.h>
 #include <WiFi.h>
@@ -1108,6 +1164,7 @@ AckState sendBinaryCommandWithAck(uint8_t deviceID, bool on, uint8_t retries,
 // #include "mqttWifiMessages.h"
 
 namespace mqttWifi {
+namespace SystemNetwork = mqttWifi; // Alias per transizione futura
 extern PubSubClient client;
 
 // ========== TOPIC DI SISTEMA (DEFAULT) ==========
@@ -1125,14 +1182,15 @@ enum AckState {
 };
 
 extern volatile AckState ackStatus;
-
-// ========== MONITORAGGIO RESILIENZA ==========
+extern bool g_gateway_mac_trovato; // Stato di aggancio del gateway
+extern bool g_gateway_paired;      // Handshake completato con successo
+extern uint8_t g_real_gateway_mac[6]; // MAC address reale del gateway
 extern uint32_t lastTimeSynced;    // Ultimo timestamp pacchetto TIME ricevuto
 extern const uint32_t SYNC_TIMEOUT; // Timeout per switch (es. 5 min)
 
 // trasporto selezionabile
-void setMqttTransport(MqttTransportType t);
-MqttTransportType getMqttTransport();
+void setNetworkTransport(NetworkTransportType t);
+NetworkTransportType getNetworkTransport();
 
 // ========== VARIABILI DI STATO ==========
 extern IPAddress m_ip;
@@ -1205,10 +1263,10 @@ bool pp_dispatchPacket(const uint8_t *payload, unsigned int length);
 
 // ========== COMANDI BINARI (PacketProtocol v2) ==========
 //void sendBinaryCommand(uint8_t deviceID, bool on);// Deprecato
-void sendBinaryAck(uint8_t deviceID, uint8_t command, bool on);
+void sendBinaryAck(uint8_t deviceID, uint8_t command, uint8_t value);
 AckState sendBinaryCommandWithAck(uint8_t deviceID, bool on,
                                   uint8_t retries = 2,
-                                  uint32_t timeoutMs = 300);
+                                  uint32_t timeoutMs = 1000);
 
 // ========== RICEZIONE TRASPORTO (PER ACK/RISPOSTE) ==========
 int receive(uint8_t *buffer, size_t buflen);

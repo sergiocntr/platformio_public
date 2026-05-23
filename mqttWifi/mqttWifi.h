@@ -6,7 +6,7 @@
 
 #elif ESP32_BUILD
 #include "esp_bt.h"
-#include "esp_bt_main.h"
+//#include "esp_bt_main.h"
 #include <HTTPClient.h>
 #include <HTTPUpdate.h>
 #include <WiFi.h>
@@ -22,6 +22,7 @@
 // #include "mqttWifiMessages.h"
 
 namespace mqttWifi {
+namespace SystemNetwork = mqttWifi; // Alias per transizione futura
 extern PubSubClient client;
 
 // ========== TOPIC DI SISTEMA (DEFAULT) ==========
@@ -46,8 +47,8 @@ extern uint32_t lastTimeSynced;    // Ultimo timestamp pacchetto TIME ricevuto
 extern const uint32_t SYNC_TIMEOUT; // Timeout per switch (es. 5 min)
 
 // trasporto selezionabile
-void setMqttTransport(MqttTransportType t);
-MqttTransportType getMqttTransport();
+void setNetworkTransport(NetworkTransportType t);
+NetworkTransportType getNetworkTransport();
 
 // ========== VARIABILI DI STATO ==========
 extern IPAddress m_ip;
@@ -120,7 +121,7 @@ bool pp_dispatchPacket(const uint8_t *payload, unsigned int length);
 
 // ========== COMANDI BINARI (PacketProtocol v2) ==========
 //void sendBinaryCommand(uint8_t deviceID, bool on);// Deprecato
-void sendBinaryAck(uint8_t deviceID, uint8_t command, bool on);
+void sendBinaryAck(uint8_t deviceID, uint8_t command, uint8_t value);
 AckState sendBinaryCommandWithAck(uint8_t deviceID, bool on,
                                   uint8_t retries = 2,
                                   uint32_t timeoutMs = 1000);

@@ -1,0 +1,208 @@
+
+// ==========================================
+// FILE: /media/progetti_ext/PROJECT/platformio_public/shared_config/shared_config.h
+// ==========================================
+
+#pragma once
+#include <Arduino.h>
+#include <cstdint>
+#include "SystemProfiles.h"
+#include <log_lib.h>
+// ========== SELEZIONE TRASPORTO (GLOBAL) ==========
+// Rendi uno dei due attivo per tutta la rete:
+#ifndef USE_MQTT_WIFI
+  #define USE_MQTT_WIFI // Standard: WiFi + MQTT (Broker TCP)
+#endif
+
+
+// Canale WiFi fisso per ESP-NOW (deve coincidere col router)
+#define WIFI_CHANNEL_GATEWAY 12
+
+// MAC Address dell'ESP32 Gateway — interfaccia STA (da aggiornare dopo il primo boot del Gateway)
+const uint8_t ESPNOW_GATEWAY_MAC[6] = {0x58, 0xbf, 0x25, 0x36, 0xd2, 0xb0};
+// MAC interfaccia SoftAP del Gateway (= STA MAC + 1). I frame broadcast ESP-NOW escono da questa interfaccia.
+const uint8_t ESPNOW_GATEWAY_AP_MAC[6] = {0x58, 0xbf, 0x25, 0x36, 0xd2, 0xb1};
+
+#define TIME_MOLTIPLIER 60 * 1000UL // 60_000UL  // 1 minuto (60_000 ms)
+#ifdef TEST_DEBUG
+const uint32_t time_between_sensors_reads = 1 * TIME_MOLTIPLIER ; // 1 minuto
+#else
+const uint32_t time_between_sensors_reads = 15 * TIME_MOLTIPLIER ; // 15 minuti
+#endif
+
+enum SensIdx {
+  INT = 0, // Interno (Chrono)
+  EXT = 1, // Esterno (ESPmeteo)
+  BAG = 2, // Bagno
+  MAX_SENS = 4
+};
+enum Tende {
+  p_l, // 0 pl_cr id 10 - pl_bar id 5
+  t_l, // 1 tl_cr id 11 - tl_bar id 6
+  p_s, // 2 ps_cr id 12 - ps_bar id 7
+  t_s, // 3 ts_cr id 13 - ts_bar id 8
+  p_c  // 4 pc_cr id 14 - pc_bar id 9
+};
+constexpr int NUM_TENDE = 5;
+// Enum per i comandi delle tende
+enum ComandoTende {
+  T_POS = 3,    // Parziale (percentuale)
+  T_STOP = 15,  // st_cr id 15
+  T_OPEN = 16,  // up_cr id 16
+  T_CLOSE = 17, // dw_cr id 17
+};
+extern ComandoTende comandoTenda;
+
+struct __attribute__((packed)) SystemState {
+	bool sensor_alive[MAX_SENS]; // specifica se il sensore e' funzionante (true) o no (false)
+  float temps[MAX_SENS];
+  float hums[MAX_SENS];
+  uint8_t ComfortRatio[MAX_SENS];
+  float waterTemp;
+  uint16_t powerW;
+  uint8_t pos[6]; // slider tende
+  bool relays[MAX_RELAY];
+  uint8_t currPage;
+  uint8_t selectionMask; // Bitmask per selezione multipla tende
+  char timeStr[8];       // Esempio: "HH:MM"
+  char dayStr[8];        // Esempio: "Lunedi"
+};
+
+extern SystemState stato;
+/* Usage (C/C++):
+ *   const char *nome = WEEKDAY_SHORT[d->day];   // "DOM", "LUN", …
+ *   const char *nome = WEEKDAY_LONG[d->day];    // "Domenica", …
+ *
+ * The same index is used in struct timeData::day (PacketProtocol.h).
+ */
+ 
+/** 3-letter abbreviations (uppercase, Italian) */
+static const char * const WEEKDAY_SHORT[7] = {
+    "DOM",  /* 0 – Sunday    */
+    "LUN",  /* 1 – Monday    */
+    "MAR",  /* 2 – Tuesday   */
+    "MER",  /* 3 – Wednesday */
+    "GIO",  /* 4 – Thursday  */
+    "VEN",  /* 5 – Friday    */
+    "SAB"   /* 6 – Saturday  */
+};
+ 
+/** Full Italian names */
+static const char * const WEEKDAY_LONG[7] = {
+    "Domenica",   /* 0 */
+    "Lunedi",     /* 1 */
+    "Martedi",    /* 2 */
+    "Mercoledi",  /* 3 */
+    "Giovedi",    /* 4 */
+    "Venerdi",    /* 5 */
+    "Sabato"      /* 6 */
+};
+ 
+
+
+
+// ==========================================
+// FILE: /media/progetti_ext/PROJECT/platformio_public/shared_config/SystemProfiles.h
+// ==========================================
+
+#ifndef SYSTEM_PROFILES_H
+#define SYSTEM_PROFILES_H
+
+/**
+ * @brief Resilient Star - Bitmask System Configuration v2.1
+ *
+ * Usa -DSYS_CONFIG=0b<bits> nel platformio.ini
+ *
+ * Mappa dei Bit (LEGENDA VISIVA):
+ * ---------------------------------------------------------------------------
+ * BIT | Valore Bin  | Funzione     | Descrizione
+ * ---------------------------------------------------------------------------
+ * [0] | 0b000000001 | LOG_SERIAL   | Abilita Serial Log
+ * [1] | 0b000000010 | LOG_UDP      | Abilita UDP Log (richiede WiFi)
+ * [2] | 0b000000100 | LOG_FORCE    | Forza Serial Log anche con conflitti HW
+ *     |             |              |
+ * [4] | 0b000010000 | RAD_FORCE_NOW| Tier 1.5: Exclusive ESP-NOW (No WiFi
+ * fallback) [5] | 0b000100000 | RAD_GATEWAY  | Modalità Gateway (ESP32 Bridge)
+ *     |             |              |
+ * [8] | 0b100000000 | HW_NEXTION   | Presente Nextion (Inibisce Serial Log)
+ * [8] | 0b100000000 | HW_PZEM      | Presente PZEM (Inibisce Serial Log)
+ * ---------------------------------------------------------------------------
+ *
+ * ESEMPI PRATICI:
+ * - ESPmeteo (Radio Exclusive + Serial Log):
+ *   SYS_CONFIG = 0b000010001 (Radio bit 4 + Serial bit 0)
+ *
+ * - Chrono (Nextion + UDP Log):
+ *   SYS_CONFIG = 0b100000010 (Nextion bit 8 + UDP bit 1)
+ */
+
+#ifndef SYS_CONFIG
+#define SYS_CONFIG 0b000000011 // Default: Serial + UDP Log, Radio Standard
+#endif
+
+// --- LOGICA DI ESTRAZIONE BIT ---
+
+// 1. Radio
+#if (SYS_CONFIG & 0b000010000)
+#define FORCE_ESPNOW
+#endif
+
+#if (SYS_CONFIG & 0b000100000)
+#define ESP32_MQTT
+#endif
+
+#ifndef ESP32_MQTT
+#define USE_MQTT_ESPNOW
+#endif
+
+// 2. Hardware & Conflitti
+#if (SYS_CONFIG & 0b100000000)
+#define USE_NEXTION
+#endif
+
+#if (SYS_CONFIG & 0b1000000000)
+#define USE_PZEM
+#endif
+
+// 3. Logica Log Seriale (con protezione conflitti)
+#if (SYS_CONFIG & 0b000000001)
+#if defined(USE_NEXTION) || defined(USE_PZEM)
+#if (SYS_CONFIG & 0b000000100)
+#define DEBUG_SERIAL_LOG // Forzato
+#warning                                                                       \
+    "ATTENZIONE: Log Seriale FORZATO su porta condivisa con Nextion/PZEM (Serial Test Mode)"
+#else
+// Inibito automaticamente per conflitto hardware
+#endif
+
+#else
+#define DEBUG_SERIAL_LOG // Abilitato normalmente
+#endif
+#endif
+
+// 4. Logica Log UDP
+#if (SYS_CONFIG & 0b000000010)
+#define DEBUG_UDP_LOG
+#else
+#define DISABLE_UDP_LOG
+#endif
+
+// 5. Livelli di Debug (dedotti)
+#ifndef DEBUG_LEVEL
+#if (SYS_CONFIG & 0b000010000)
+#define DEBUG_LEVEL 3 // Più debug per nodi a batteria
+#else
+#define DEBUG_LEVEL 1 // Standard
+#endif
+#endif
+
+#endif // SYSTEM_PROFILES_H
+
+
+
+// ==========================================
+// FILE: /media/progetti_ext/PROJECT/platformio_public/shared_config/shared_config.cpp
+// ==========================================
+
+
+
