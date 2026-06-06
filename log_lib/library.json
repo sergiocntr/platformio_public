@@ -1,12 +1,17 @@
 {
-  "name": "log_lib",
-  "version": "1.0.5",
-  "description": "UDP/Serial logging library for Arduino/ESP projects",
-  "keywords": ["logging", "udp", "debug"],
-  "frameworks": "arduino",
-  "platforms": ["espressif8266", "espressif32"],
-  "build": {
-    "srcDir": ".",
-    "includeDir": "."
-  }
+    "name": "log_lib",
+    "version": "1.0.0",
+    "keywords": "",
+    "description": "",
+    "repository": {
+        "type": "",
+        "url": ""
+    },
+    "authors": [],
+    "license": "",
+    "frameworks": "*",
+    "platforms": "*",
+    "build": {
+        "srcDir": "src"
+    }
 }

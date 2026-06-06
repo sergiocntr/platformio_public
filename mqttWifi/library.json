@@ -1,22 +1,17 @@
 {
-  "name": "mqttWifi",
-  "version": "2.0.2",
-  "description": "WiFi + MQTT + ESPNow connection manager for ESP8266/ESP32",
-  "keywords": [
-    "mqtt",
-    "wifi",
-    "esp8266",
-    "esp32",
-    "espnow",
-    "connection"
-  ],
-  "frameworks": "arduino",
-  "platforms": [
-    "espressif8266",
-    "espressif32"
-  ],
-  "build": {
-    "srcDir": ".",
-    "includeDir": "."
-  }
+    "name": "mqttWifi",
+    "version": "1.0.0",
+    "keywords": "",
+    "description": "",
+    "repository": {
+        "type": "",
+        "url": ""
+    },
+    "authors": [],
+    "license": "",
+    "frameworks": "*",
+    "platforms": "*",
+    "build": {
+        "srcDir": "src"
+    }
 }

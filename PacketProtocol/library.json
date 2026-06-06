@@ -1,12 +1,17 @@
 {
-  "name": "PacketProtocol",
-  "version": "1.0.4",
-  "description": "Binary packet protocol for sensor data transmission",
-  "keywords": ["protocol", "binary", "mqtt"],
-  "frameworks": "arduino",
-  "platforms": ["espressif8266", "espressif32"],
+    "name": "PacketProtocol",
+    "version": "1.0.0",
+    "keywords": "",
+    "description": "",
+    "repository": {
+        "type": "",
+        "url": ""
+    },
+    "authors": [],
+    "license": "",
+    "frameworks": "*",
+    "platforms": "*",
     "build": {
-    "srcDir": ".",
-    "includeDir": "."
-  }
+        "srcDir": "src"
+    }
 }
