@@ -111,7 +111,7 @@ void setCallback();
 void sendAnnounce();
 
 // Gestione diretta dell'ACK binario (da chiamare nella callback se topic ==
-// espNowBridgeAck)
+// BridgeAck)
 void handleAckPacket(const uint8_t *payload, size_t len);
 
 // ========== DISPATCHER CENTRALIZZATO PacketProtocol ==========

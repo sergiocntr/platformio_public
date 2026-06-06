@@ -4,8 +4,8 @@
 namespace mqttWifi {
 
 const char *CORE_TOPICS[] = {
-    espNowBridgeCmd, espNowBridgeAck,
-    espNowBridgeBuffer, // Fondamentale per i nodi in WiFi per sentire l'Ora e i
+    BridgeCmd, BridgeAck,
+    BridgeBuffer, // Fondamentale per i nodi in WiFi per sentire l'Ora e i
                         // Sensori MQTT
     nullptr             // Sentinella
 };
@@ -150,7 +150,7 @@ void sendAnnounce() {
 
   size_t sz = pp_buildPacket(TYPE_ANNOUNCE, (uint8_t *)&data,
                              sizeof(announceData), buf);
-  publish(espNowBridgeBuffer, buf, sz, false);
+  publish(BridgeBuffer, buf, sz, false);
 }
 
 void sendBinaryAck(uint8_t deviceID, uint8_t command, uint8_t value) {
@@ -163,7 +163,7 @@ void sendBinaryAck(uint8_t deviceID, uint8_t command, uint8_t value) {
   uint8_t buffer[HEADER_SIZE + sizeof(ackData) + 1];
   size_t packetSize =
       pp_buildPacket(TYPE_ACK, (uint8_t *)&d, sizeof(ackData), buffer);
-  publish(espNowBridgeAck, buffer, packetSize, false);
+  publish(BridgeAck, buffer, packetSize, false);
 }
 
 AckState waitForAck(uint32_t timeoutMs) {
@@ -234,7 +234,7 @@ AckState sendBinaryCommandWithAck(uint8_t deviceID, bool on, uint8_t retries,
   for (int i = 0; i <= retries; i++) {
     ackStatus = NO_ACK;
 
-    if (!publish(espNowBridgeCmd, buffer, packetSize, false)) {
+    if (!publish(BridgeCmd, buffer, packetSize, false)) {
       LOG_WARN("[CMD-ACK] Publish fallito al tentativo %d/%d", i + 1,
                retries + 1);
       delay(200);
